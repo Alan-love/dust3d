@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016-2021 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved. 
+ *  Copyright (c) 2016-2026 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved. 
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -43,11 +43,10 @@ struct ObjectNode {
     Vector3 origin;
     //float radius = 0.0;
     Color color;
-    //float colorSolubility = 0.0;
+    float smoothCutoffDegrees = 0.0;
     //float metalness = 0.0;
     //float roughness = 1.0;
     //Uuid materialId;
-    //bool countershaded = false;
     //Uuid mirrorFromPartId;
     //Uuid mirroredByPartId;
     //Vector3 direction;
@@ -61,10 +60,22 @@ public:
     std::map<Uuid, ObjectNode> nodeMap;
     std::vector<std::vector<size_t>> triangleAndQuads;
     std::vector<std::vector<size_t>> triangles;
-    std::unordered_map<Uuid, std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> partTriangleUvs;
-    std::vector<std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> seamTriangleUvs;
+    std::unordered_map<Uuid, std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> componentTriangleUvs;
+    std::vector<std::pair<std::set<std::array<PositionKey, 3>>, std::set<std::array<PositionKey, 3>>>> seamTriangleUvs;
     std::vector<Vector3> triangleNormals;
     std::vector<Color> vertexColors;
+    std::vector<float> vertexSmoothCutoffDegrees;
+    std::map<std::array<PositionKey, 3>, Uuid> brokenTrianglesToComponentIdMap;
+    std::map<Uuid, std::string> componentNames; // the component names, for exporters to label parts
+    std::vector<Uuid> triangleComponentIds; // the component each triangle came from (parallel to triangles)
+
+    // Bone binding data: each vertex can be bound to at most 2 bones with interpolation weights
+    // Indexed parallel to vertices; bone names and weights stored in pairs
+    // vertexBone1[i] = {primary bone name, weight1}
+    // vertexBone2[i] = {secondary bone name, weight2}  (second string empty if unused)
+    std::vector<std::pair<std::string, float>> vertexBone1;
+    std::vector<std::pair<std::string, float>> vertexBone2;
+
     bool alphaEnabled = false;
     uint64_t meshId = 0;
 
@@ -138,6 +149,28 @@ public:
     {
         m_triangleLinks = triangleLinks;
         m_hasTriangleLinks = true;
+    }
+
+    void copyUvFrom(const Object& source)
+    {
+        componentTriangleUvs = source.componentTriangleUvs;
+        seamTriangleUvs = source.seamTriangleUvs;
+        brokenTrianglesToComponentIdMap = source.brokenTrianglesToComponentIdMap;
+        componentNames = source.componentNames;
+        if (source.triangleComponentIds.size() == triangles.size())
+            triangleComponentIds = source.triangleComponentIds;
+        if (source.m_hasTriangleVertexUvs) {
+            m_triangleVertexUvs = source.m_triangleVertexUvs;
+            m_hasTriangleVertexUvs = true;
+        }
+        if (source.m_hasTriangleTangents) {
+            m_triangleTangents = source.m_triangleTangents;
+            m_hasTriangleTangents = true;
+        }
+        if (source.m_hasPartUvRects) {
+            m_partUvRects = source.m_partUvRects;
+            m_hasPartUvRects = true;
+        }
     }
 
 private:

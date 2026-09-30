@@ -6,14 +6,18 @@
 #include "skeleton_ik_mover.h"
 #include "theme.h"
 #include "turnaround_loader.h"
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsView>
 #include <QKeyEvent>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QThread>
 #include <QTimer>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <set>
 
 class SkeletonGraphicsEdgeItem;
@@ -29,9 +33,6 @@ signals:
     void addNode(float x, float y, float z, float radius, dust3d::Uuid fromNodeId);
     void scaleNodeByAddRadius(dust3d::Uuid nodeId, float amount);
     void moveNodeBy(dust3d::Uuid nodeId, float x, float y, float z);
-    void setNodeBoneJointState(const dust3d::Uuid& nodeId, bool boneJoint);
-    void addNodesToBone(const dust3d::Uuid& boneId, const std::vector<dust3d::Uuid>& nodeIds);
-    void removeNodesFromBone(const dust3d::Uuid& boneId, const std::vector<dust3d::Uuid>& nodeIds);
     void removeNode(dust3d::Uuid nodeId);
     void removePart(dust3d::Uuid partId);
     void setEditMode(Document::EditMode mode);
@@ -39,10 +40,13 @@ signals:
     void addEdge(dust3d::Uuid fromNodeId, dust3d::Uuid toNodeId);
     void cursorChanged();
     void groupOperationAdded();
+    void skeletonSelectionChanged();
     void undo();
     void redo();
     void paste();
     void changeTurnaround();
+    void loadedTurnaroundImageFiles(QStringList fileNames);
+    void droppedDs3File(const QString& filename);
     void batchChangeBegin();
     void batchChangeEnd();
     void open();
@@ -73,8 +77,10 @@ signals:
     void shortcutToggleWireframe();
     void partComponentChecked(dust3d::Uuid partId);
     void showOrHideAllComponents();
+    void showAllOrHideOtherComponents(dust3d::Uuid componentId);
     void shortcutToggleFlatShading();
     void shortcutToggleRotation();
+    void showComponentPropertyRequested(std::set<dust3d::Uuid> partIds);
     void loadedTurnaroundImageChanged();
     void nodePicked(const dust3d::Uuid& nodeId);
 
@@ -87,6 +93,13 @@ public:
     bool mouseRelease(QMouseEvent* event);
     bool mousePress(QMouseEvent* event);
     bool mouseDoubleClick(QMouseEvent* event);
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
+public:
     bool keyPress(QKeyEvent* event);
     bool keyRelease(QKeyEvent* event);
     bool checkSkeletonItem(QGraphicsItem* item, bool checked);
@@ -102,7 +115,10 @@ public:
     bool hasMultipleSelection();
     bool hasEdgeSelection();
     bool hasNodeSelection();
+    std::set<dust3d::Uuid> getSelectedEdgeIds();
     bool hasTwoDisconnectedNodesSelection();
+    void setNodeSelectionEnabled(bool enabled);
+    bool isNodeSelectionEnabled() const;
     void setModelWidget(ModelWidget* modelWidget);
     bool inputWheelEventFromOtherWidget(QWheelEvent* event);
     bool rotated();
@@ -123,8 +139,8 @@ public slots:
     void edgeRemoved(dust3d::Uuid edgeId);
     void nodeRadiusChanged(dust3d::Uuid nodeId);
     void nodeOriginChanged(dust3d::Uuid nodeId);
-    void nodeBoneJointStateChanged(const dust3d::Uuid& nodeId);
     void edgeReversed(dust3d::Uuid edgeId);
+    void edgeNodeChanged(const dust3d::Uuid& edgeId);
     void turnaroundChanged();
     void canvasResized();
     void editModeChanged();
@@ -144,6 +160,10 @@ public slots:
     void flipVertically();
     void rotateClockwise90Degree();
     void rotateCounterclockwise90Degree();
+    void rotateSelectedAroundZAxis90Degree();
+    void rotateSelectedAroundZAxisMinus90Degree();
+    void rotateSelectedAroundXAxis90Degree();
+    void rotateSelectedAroundXAxisMinus90Degree();
     void rotateAllMainProfileClockwise90DegreeAlongOrigin();
     void rotateAllMainProfileCounterclockwise90DegreeAlongOrigin();
     void removeAllContent();
@@ -168,6 +188,9 @@ public slots:
     void selectPartAllById(dust3d::Uuid partId);
     void addSelectNode(dust3d::Uuid nodeId);
     void addSelectEdge(dust3d::Uuid edgeId);
+    void addSelectEdgeOnSideProfile(dust3d::Uuid edgeId);
+    void highlightEdges(const std::set<dust3d::Uuid>& edgeIds);
+    void clearEdgeHighlights();
     void enableBackgroundBlur();
     void disableBackgroundBlur();
     void setBackgroundBlur(float turnaroundOpacity);
@@ -201,6 +224,7 @@ public slots:
     void shortcutScaleSelectedBy1();
     void shortcutSwitchProfileOnSelected();
     void shortcutShowOrHideSelectedPart();
+    void shortcutHideOtherParts();
     void shortcutEnableOrDisableSelectedPart();
     void shortcutLockOrUnlockSelectedPart();
     void shortcutXmirrorOnOrOffSelectedPart();
@@ -210,8 +234,9 @@ public slots:
     void shortcutChamferedOrNotSelectedPart();
     void shortcutSelectAll();
     void shortcutEscape();
-    void markSelectedAsBoneJoint();
-    void markSelectedAsNotBoneJoint();
+    void shortcutShowComponentProperty();
+    void clearRangeSelection();
+    void switchProfileOnRangeSelection();
 private slots:
     void turnaroundImageReady();
 
@@ -224,23 +249,18 @@ private:
     void updateTurnaround();
     void updateItems();
     void checkRangeSelection();
-    void clearRangeSelection();
     void removeItem(QGraphicsItem* item);
     QVector2D centerOfNodeItemSet(const std::set<SkeletonGraphicsNodeItem*>& set);
     bool isSingleNodeSelected();
     void addItemToRangeSelection(QGraphicsItem* item);
     void removeItemFromRangeSelection(QGraphicsItem* item);
     void hoverPart(dust3d::Uuid partId);
-    void switchProfileOnRangeSelection();
     void setItemHoveredOnAllProfiles(QGraphicsItem* item, bool hovered);
     void alignSelectedToGlobal(bool alignToVerticalCenter, bool alignToHorizontalCenter);
     void alignSelectedToLocal(bool alignToVerticalCenter, bool alignToHorizontalCenter);
     void rotateItems(const std::set<SkeletonGraphicsNodeItem*>& nodeItems, int degree, QVector2D center);
     void rotateAllSideProfile(int degree);
     bool isFloatEqual(float a, float b);
-    void setNodeBoneJointStates(const std::vector<dust3d::Uuid>& nodeIds, bool boneJoint);
-    void addSelectedToBone(const dust3d::Uuid& boneId);
-    void removeSelectedFromBone(const dust3d::Uuid& boneId);
 
 private:
     const Document* m_document = nullptr;
@@ -254,6 +274,7 @@ private:
     SkeletonGraphicsNodeItem* m_addFromNodeItem = nullptr;
     SkeletonGraphicsNodeItem* m_hoveredNodeItem = nullptr;
     SkeletonGraphicsEdgeItem* m_hoveredEdgeItem = nullptr;
+    std::vector<SkeletonGraphicsEdgeItem*> m_highlightedEdgeItems;
     float m_lastAddedX = false;
     float m_lastAddedY = false;
     float m_lastAddedZ = false;
@@ -273,6 +294,7 @@ private:
     ModelWidget* m_modelWidget = nullptr;
     float m_turnaroundOpacity = 0.25f;
     bool m_rotated = false;
+    bool m_nodeSelectionEnabled = true;
     QImage* m_backgroundImage = nullptr;
     QVector3D m_ikMoveTarget;
     dust3d::Uuid m_ikMoveEndEffectorId;
@@ -283,6 +305,7 @@ private:
     dust3d::Uuid m_lastCheckedPart;
     std::set<dust3d::Uuid> m_deferredRemoveNodeIds;
     std::set<dust3d::Uuid> m_deferredRemoveEdgeIds;
+    std::unique_ptr<QMenu> m_contextMenu;
 };
 
 class SkeletonGraphicsContainerWidget : public QWidget {

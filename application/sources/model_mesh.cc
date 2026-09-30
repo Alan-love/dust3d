@@ -12,6 +12,7 @@ ModelMesh::ModelMesh(const ModelMesh& mesh)
     : m_triangleVertices(nullptr)
     , m_triangleVertexCount(0)
     , m_textureImage(nullptr)
+    , m_skeletonVertexCount(mesh.m_skeletonVertexCount)
 {
     if (nullptr != mesh.m_triangleVertices && mesh.m_triangleVertexCount > 0) {
         this->m_triangleVertices = new ModelOpenGLVertex[mesh.m_triangleVertexCount];
@@ -35,6 +36,22 @@ ModelMesh::ModelMesh(const ModelMesh& mesh)
     this->m_faces = mesh.m_faces;
     this->m_triangulatedVertices = mesh.m_triangulatedVertices;
     this->m_meshId = mesh.meshId();
+    this->m_skeletonVertexCount = mesh.m_skeletonVertexCount;
+}
+
+int ModelMesh::triangleVertexCount() const
+{
+    return m_triangleVertexCount;
+}
+
+int ModelMesh::skeletonVertexCount() const
+{
+    return m_skeletonVertexCount;
+}
+
+void ModelMesh::setSkeletonVertexCount(int count)
+{
+    m_skeletonVertexCount = count;
 }
 
 void ModelMesh::removeColor()
@@ -54,9 +71,10 @@ void ModelMesh::removeColor()
 
     for (int i = 0; i < this->m_triangleVertexCount; ++i) {
         auto& vertex = this->m_triangleVertices[i];
-        vertex.colorR = 1.0;
-        vertex.colorG = 1.0;
-        vertex.colorB = 1.0;
+        // Warm paper-white
+        vertex.colorR = 0.96;
+        vertex.colorG = 0.94;
+        vertex.colorB = 0.91;
     }
 }
 
@@ -218,11 +236,6 @@ ModelOpenGLVertex* ModelMesh::triangleVertices()
     return m_triangleVertices;
 }
 
-int ModelMesh::triangleVertexCount()
-{
-    return m_triangleVertexCount;
-}
-
 void ModelMesh::setTextureImage(QImage* textureImage)
 {
     m_textureImage = textureImage;
@@ -307,17 +320,17 @@ void ModelMesh::setHasAmbientOcclusionInImage(bool hasInImage)
 void ModelMesh::exportAsObj(QTextStream* textStream)
 {
     auto& stream = *textStream;
-    stream << "# " << APP_NAME << " " << APP_HUMAN_VER << endl;
-    stream << "# " << APP_HOMEPAGE_URL << endl;
+    stream << "# " << APP_NAME << " " << APP_HUMAN_VER << "\n";
+    stream << "# " << APP_HOMEPAGE_URL << "\n";
     for (std::vector<dust3d::Vector3>::const_iterator it = vertices().begin(); it != vertices().end(); ++it) {
-        stream << "v " << QString::number((*it).x()) << " " << QString::number((*it).y()) << " " << QString::number((*it).z()) << endl;
+        stream << "v " << QString::number((*it).x()) << " " << QString::number((*it).y()) << " " << QString::number((*it).z()) << "\n";
     }
     for (std::vector<std::vector<size_t>>::const_iterator it = faces().begin(); it != faces().end(); ++it) {
         stream << "f";
         for (std::vector<size_t>::const_iterator subIt = (*it).begin(); subIt != (*it).end(); ++subIt) {
             stream << " " << QString::number((1 + *subIt));
         }
-        stream << endl;
+        stream << "\n";
     }
 }
 

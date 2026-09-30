@@ -1,11 +1,16 @@
 #ifndef DUST3D_APPLICATION_PART_MANAGE_WIDGET_H_
 #define DUST3D_APPLICATION_PART_MANAGE_WIDGET_H_
 
+#include <QMenu>
 #include <QWidget>
+#include <dust3d/base/part_target.h>
 #include <dust3d/base/uuid.h>
+#include <memory>
+#include <set>
 
 class Document;
 class ComponentPreviewGridWidget;
+class ComponentBreadcrumbWidget;
 class ComponentPropertyWidget;
 class QPushButton;
 
@@ -14,12 +19,19 @@ class PartManageWidget : public QWidget {
 signals:
     void unselectAllOnCanvas();
     void selectPartOnCanvas(const dust3d::Uuid& partId);
+    void setPartTarget(const dust3d::Uuid& partId, dust3d::PartTarget target);
     void groupComponents(const std::vector<dust3d::Uuid>& componentIds);
+    void removeComponent(const dust3d::Uuid& componentId);
     void ungroupComponent(const dust3d::Uuid& componentId);
+    void moveComponentUp(const dust3d::Uuid& componentId);
+    void moveComponentDown(const dust3d::Uuid& componentId);
+    void moveComponentToTop(const dust3d::Uuid& componentId);
+    void moveComponentToBottom(const dust3d::Uuid& componentId);
     void groupOperationAdded();
 public slots:
     void selectComponentByPartId(const dust3d::Uuid& partId);
     void showSelectedComponentProperties();
+    void showComponentPropertyForParts(std::set<dust3d::Uuid> partIds);
     void showContextMenu(const QPoint& pos);
 
 public:
@@ -28,6 +40,7 @@ public:
 private:
     Document* m_document = nullptr;
     ComponentPreviewGridWidget* m_componentPreviewGridWidget = nullptr;
+    ComponentBreadcrumbWidget* m_breadcrumbWidget = nullptr;
     QPushButton* m_levelUpButton = nullptr;
     QPushButton* m_selectButton = nullptr;
     QPushButton* m_lockButton = nullptr;
@@ -37,6 +50,7 @@ private:
     QPushButton* m_unlinkButton = nullptr;
     QPushButton* m_linkButton = nullptr;
     QPushButton* m_propertyButton = nullptr;
+    std::unique_ptr<QMenu> m_contextMenu;
     void updateToolButtons();
     void updateLevelUpButton();
     bool hasSelectedGroupedComponent();

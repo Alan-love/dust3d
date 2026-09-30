@@ -41,11 +41,13 @@ private:
     std::vector<std::vector<size_t>> m_generatedFaces;
     std::vector<std::vector<Vector2>> m_generatedFaceUvs;
 
-    size_t m_ringSize = 0;
+    std::vector<Vector3> m_vertices;
     double m_ringV = 0.0;
     double m_centerV = 0.0;
-    std::vector<Vector3> m_vertices;
-    bool isConvex(const std::vector<Vector3>& vertices);
+    std::vector<double> m_ringUs;
+
+    void remeshConvex(const std::vector<size_t>& ringVertices, const std::vector<double>& ringUs);
+    bool isConvex(const std::vector<size_t>& ringVertices);
 };
 
 }

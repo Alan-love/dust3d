@@ -21,6 +21,7 @@
  */
 
 #include <algorithm>
+#include <cmath>
 #include <dust3d/base/debug.h>
 #include <dust3d/mesh/base_normal.h>
 #include <dust3d/mesh/section_remesher.h>
@@ -35,27 +36,27 @@ TubeMeshBuilder::TubeMeshBuilder(const BuildParameters& buildParameters, std::ve
 {
 }
 
-const Vector3& TubeMeshBuilder::generatedBaseNormal()
+const Vector3& TubeMeshBuilder::generatedBaseNormal() const
 {
     return m_generatedBaseNormal;
 }
 
-const std::vector<Vector3>& TubeMeshBuilder::generatedVertices()
+const std::vector<Vector3>& TubeMeshBuilder::generatedVertices() const
 {
     return m_generatedVertices;
 }
 
-const std::vector<Uuid>& TubeMeshBuilder::generatedVertexSources()
+const std::vector<Uuid>& TubeMeshBuilder::generatedVertexSources() const
 {
     return m_generatedVertexSources;
 }
 
-const std::vector<std::vector<size_t>>& TubeMeshBuilder::generatedFaces()
+const std::vector<std::vector<size_t>>& TubeMeshBuilder::generatedFaces() const
 {
     return m_generatedFaces;
 }
 
-const std::vector<std::vector<Vector2>>& TubeMeshBuilder::generatedFaceUvs()
+const std::vector<std::vector<Vector2>>& TubeMeshBuilder::generatedFaceUvs() const
 {
     return m_generatedFaceUvs;
 }
@@ -83,41 +84,145 @@ void TubeMeshBuilder::applyRoundEnd()
     }
 }
 
-void TubeMeshBuilder::applyInterpolation()
+void TubeMeshBuilder::turnSingleNodeToTube()
 {
-    if (!m_buildParameters.interpolationEnabled)
+    if (1 != m_nodes.size())
         return;
 
-    if (m_nodes.size() <= 1)
+    size_t subdivTimes = ((m_buildParameters.cutFace.size() + 3) / 4) - 1;
+
+    if (0 == subdivTimes) {
+        std::vector<MeshNode> interpolatedNodes;
+        interpolatedNodes.emplace_back(MeshNode {
+            m_nodes.front().origin + Vector3(0.0, m_nodes.front().radius, 0.0),
+            m_nodes.front().radius,
+            m_nodes.front().sourceId });
+        interpolatedNodes.emplace_back(MeshNode {
+            m_nodes.front().origin - Vector3(0.0, m_nodes.front().radius, 0.0),
+            m_nodes.front().radius,
+            m_nodes.front().sourceId });
+        m_nodes = std::move(interpolatedNodes);
         return;
+    }
 
     std::vector<MeshNode> interpolatedNodes;
+    double stepY = 0.45;
+    for (auto y = stepY; y < 1.0; y += stepY) {
+        auto moveY = m_nodes.front().radius * y;
+        interpolatedNodes.emplace_back(MeshNode {
+            m_nodes.front().origin + Vector3(0.0, 0.0, moveY),
+            std::sqrt(std::pow(m_nodes.front().radius, 2.0) - std::pow(moveY, 2.0)),
+            m_nodes.front().sourceId });
+    }
+    std::reverse(interpolatedNodes.begin(), interpolatedNodes.end());
     interpolatedNodes.push_back(m_nodes.front());
+    for (auto y = stepY; y < 1.0; y += stepY) {
+        auto moveY = m_nodes.front().radius * y;
+        interpolatedNodes.emplace_back(MeshNode {
+            m_nodes.front().origin - Vector3(0.0, 0.0, moveY),
+            std::sqrt(std::pow(m_nodes.front().radius, 2.0) - std::pow(moveY, 2.0)),
+            m_nodes.front().sourceId });
+    }
+    m_nodes = std::move(interpolatedNodes);
+}
+
+bool TubeMeshBuilder::applyInterpolation(size_t maxNodes)
+{
+    if (m_nodes.empty() || m_nodes.size() > maxNodes)
+        return false;
+
+    // Preflight the whole tube before allocating interpolated nodes. In particular,
+    // never convert NaN, infinity or an unbounded quotient to size_t (#184).
+    std::vector<size_t> segmentCounts(m_nodes.size(), 1);
+    size_t nodeCount = m_nodes.size();
     for (size_t j = 1; j < m_nodes.size(); ++j) {
         size_t i = j - 1;
         double distance = (m_nodes[i].origin - m_nodes[j].origin).length();
         double radiusDistance = m_nodes[i].radius + m_nodes[j].radius;
-        if (radiusDistance <= distance) {
-            double targetDistance = radiusDistance;
-            size_t segments = distance / targetDistance;
-            for (size_t k = 1; k < segments; ++k) {
-                double ratio = (double)k / segments;
-                MeshNode newNode;
-                newNode.origin = m_nodes[i].origin * (1.0 - ratio) + m_nodes[j].origin * ratio;
-                newNode.radius = m_nodes[i].radius * (1.0 - ratio) + m_nodes[j].radius * ratio;
-                interpolatedNodes.push_back(newNode);
-            }
+        if (!std::isfinite(distance) || !std::isfinite(radiusDistance))
+            return false;
+        if (!m_buildParameters.interpolationEnabled || distance < radiusDistance)
+            continue;
+        double segments = std::floor(distance / radiusDistance);
+        if (!std::isfinite(segments) || segments > static_cast<double>(maxNodes - nodeCount + 1))
+            return false;
+        segmentCounts[j] = static_cast<size_t>(segments);
+        nodeCount += segmentCounts[j] - 1;
+    }
+
+    std::vector<MeshNode> interpolatedNodes;
+    interpolatedNodes.reserve(nodeCount);
+    interpolatedNodes.push_back(m_nodes.front());
+    for (size_t j = 1; j < m_nodes.size(); ++j) {
+        size_t i = j - 1;
+        size_t segments = segmentCounts[j];
+        for (size_t k = 1; k < segments; ++k) {
+            double ratio = static_cast<double>(k) / segments;
+            MeshNode newNode;
+            newNode.origin = m_nodes[i].origin * (1.0 - ratio) + m_nodes[j].origin * ratio;
+            newNode.radius = m_nodes[i].radius * (1.0 - ratio) + m_nodes[j].radius * ratio;
+            newNode.sourceId = (ratio < 0.5) ? m_nodes[i].sourceId : m_nodes[j].sourceId;
+            newNode.deformWidth = m_nodes[i].deformWidth * (1.0 - ratio) + m_nodes[j].deformWidth * ratio;
+            newNode.deformThickness = m_nodes[i].deformThickness * (1.0 - ratio) + m_nodes[j].deformThickness * ratio;
+            interpolatedNodes.push_back(newNode);
         }
         interpolatedNodes.push_back(m_nodes[j]);
     }
 
     m_nodes = std::move(interpolatedNodes);
+    return true;
 }
 
-void TubeMeshBuilder::preprocessNodes()
+bool TubeMeshBuilder::preprocessNodes()
 {
-    applyInterpolation();
+    // Bound the ring geometry this tube can generate (nodes x cut face points).
+    // Legitimate tubes stay in the low thousands of vertices; 256k keeps a single
+    // pathological part to roughly tens of megabytes across the builder and the
+    // mesh generator caches, instead of gigabytes.
+    constexpr size_t maxTubeNodes = 65536;
+    constexpr size_t maxTubeRingVertices = 262144;
+    // Rounded ends add one ring at each end after interpolation.
+    constexpr size_t roundEndRings = 2;
+    const size_t cutFaceSize = m_buildParameters.cutFace.size();
+    if (cutFaceSize < 3) {
+        dust3dDebug << "Tube cut face has too few points:" << cutFaceSize;
+        return false;
+    }
+    const size_t nodesByVertexBudget = maxTubeRingVertices / cutFaceSize;
+    if (nodesByVertexBudget < 2 + roundEndRings) {
+        dust3dDebug << "Tube cut face has too many points:" << cutFaceSize;
+        return false;
+    }
+    const size_t maxNodes = std::min(maxTubeNodes, nodesByVertexBudget) - roundEndRings;
+    if (m_nodes.empty() || m_nodes.size() > maxNodes) {
+        dust3dDebug << "Tube node count out of range:" << m_nodes.size();
+        return false;
+    }
+    if (!std::isfinite(m_buildParameters.deformWidth) || !std::isfinite(m_buildParameters.deformThickness)
+        || !std::isfinite(m_buildParameters.baseNormalRotation)) {
+        dust3dDebug << "Tube deform or rotation parameter is not finite";
+        return false;
+    }
+    for (const auto& point : m_buildParameters.cutFace) {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
+            dust3dDebug << "Tube cut face point is not finite";
+            return false;
+        }
+    }
+    for (const auto& node : m_nodes) {
+        if (!std::isfinite(node.radius) || node.radius <= 0.0
+            || !std::isfinite(node.origin.x()) || !std::isfinite(node.origin.y()) || !std::isfinite(node.origin.z())) {
+            dust3dDebug << "Tube node has invalid radius or position, radius:" << node.radius;
+            return false;
+        }
+    }
+    turnSingleNodeToTube();
+    if (!applyInterpolation(maxNodes)) {
+        dust3dDebug << "Tube interpolation would exceed" << maxNodes << "nodes";
+        return false;
+    }
     applyRoundEnd();
+    return true;
 }
 
 void TubeMeshBuilder::buildNodePositionAndDirections()
@@ -162,14 +267,16 @@ void TubeMeshBuilder::buildNodePositionAndDirections()
 
 std::vector<Vector3> TubeMeshBuilder::buildCutFaceVertices(const Vector3& origin,
     double radius,
-    const Vector3& forwardDirection)
+    const Vector3& forwardDirection,
+    double nodeDeformWidth,
+    double nodeDeformThickness)
 {
     std::vector<Vector3> cutFaceVertices(m_buildParameters.cutFace.size());
     Vector3 u = m_generatedBaseNormal.rotated(-forwardDirection, m_buildParameters.baseNormalRotation);
     Vector3 v = Vector3::crossProduct(forwardDirection, u).normalized();
     u = Vector3::crossProduct(v, forwardDirection).normalized();
-    auto uFactor = u * radius * m_buildParameters.deformWidth;
-    auto vFactor = v * radius * m_buildParameters.deformThickness;
+    auto uFactor = u * radius * m_buildParameters.deformWidth * nodeDeformWidth;
+    auto vFactor = v * radius * m_buildParameters.deformThickness * nodeDeformThickness;
     if (m_buildParameters.deformUnified) {
         if (!Math::isEqual(m_buildParameters.deformWidth, 1.0)) {
             uFactor *= m_maxNodeRadius / radius;
@@ -187,9 +294,7 @@ std::vector<Vector3> TubeMeshBuilder::buildCutFaceVertices(const Vector3& origin
 
 void TubeMeshBuilder::build()
 {
-    preprocessNodes();
-
-    if (m_nodes.empty())
+    if (!preprocessNodes())
         return;
 
     buildNodePositionAndDirections();
@@ -219,7 +324,9 @@ void TubeMeshBuilder::build()
     for (size_t i = 0; i < m_nodePositions.size(); ++i) {
         cutFaceVertexPositions.emplace_back(buildCutFaceVertices(m_nodePositions[i],
             m_nodes[i].radius,
-            m_nodeForwardDirections[i]));
+            m_nodeForwardDirections[i],
+            m_nodes[i].deformWidth,
+            m_nodes[i].deformThickness));
     }
 
     // Build all vertex Uvs
@@ -321,6 +428,7 @@ void TubeMeshBuilder::addCap(const std::vector<size_t>& section, double ringV, d
     for (size_t i = ringVertices.size(); i < resultVertices.size(); ++i) {
         vertexIndices.push_back(m_generatedVertices.size());
         m_generatedVertices.push_back(resultVertices[i]);
+        m_generatedVertexSources.push_back(m_generatedVertexSources[vertexIndices[0]]);
     }
     for (const auto& it : sectionRemesher.generatedFaces()) {
         std::vector<size_t> newFace(it.size());

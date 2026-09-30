@@ -6,23 +6,32 @@
 #include "mesh_preview_images_generator.h"
 #include "model_widget.h"
 #include <QAction>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QLabel>
 #include <QMainWindow>
 #include <QMenu>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QShortcut>
 #include <QShowEvent>
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <map>
 #include <memory>
+#include <vector>
 
 class Document;
 class SkeletonGraphicsWidget;
 class PartManageWidget;
 class BoneManageWidget;
+class AnimationManageWidget;
 class ToolbarButton;
 class SpinnableToolbarIcon;
+class ModelWidget;
+class TurnaroundOverlayWidget;
+class QVBoxLayout;
 
 class DocumentWindow : public QMainWindow {
     Q_OBJECT
@@ -37,8 +46,11 @@ public:
     ~DocumentWindow();
     Document* document();
     ModelWidget* modelWidget();
+    SkeletonGraphicsWidget* canvasGraphicsWidget();
+    BoneManageWidget* boneManageWidget();
+    AnimationManageWidget* animationManageWidget();
     bool isWorking();
-    static DocumentWindow* createDocumentWindow();
+    static DocumentWindow* createDocumentWindow(bool visible = true);
     static const std::map<DocumentWindow*, dust3d::Uuid>& documentWindows();
     static void showAcknowlegements();
     static void showContributors();
@@ -48,31 +60,38 @@ public:
 
 protected:
     void showEvent(QShowEvent* event);
+    void resizeEvent(QResizeEvent* event) override;
     void closeEvent(QCloseEvent* event);
     void mousePressEvent(QMouseEvent* event);
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+    void changeEvent(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 public slots:
     void changeTurnaround();
+    void loadTurnaroundImageFiles(QStringList fileNames);
+    void eraseTurnaround();
     void save();
     void saveTo(const QString& saveAsFilename);
     void open();
-    void openExample(const QString& modelName);
+    void openPathDataAs(const QString& path, const QByteArray& fileData, const QString& asName);
     void openPathAs(const QString& path, const QString& asName);
+    bool openDroppedDs3File(const QString& filename);
     void exportObjResult();
     void exportGlbResult();
     void exportFbxResult();
+    void exportGlbAndWavsResult();
+    void exportFbxAndWavsResult();
     void newWindow();
     void newDocument();
     void saveAs();
     void saveAll();
     void gotoHomepage();
-    void viewSource();
     void about();
-    void checkForUpdates();
     void reportIssues();
     void seeAcknowlegements();
     void seeContributors();
     void seeSupporters();
-    void seeReferenceGuide();
     void documentChanged();
     void updateXlockButtonState();
     void updateYlockButtonState();
@@ -84,15 +103,15 @@ public slots:
     void checkExportWaitingList();
     void exportObjToFilename(const QString& filename);
     void exportFbxToFilename(const QString& filename);
-    void exportGlbToFilename(const QString& filename);
+    void exportGlbToFilename(const QString& filename, std::function<void()> onFinished = nullptr);
+    void exportModelAndWavs(const QString& directory, const QString& format);
     void toggleRotation();
     void generateComponentPreviewImages();
     void componentPreviewImagesReady();
     void decorateComponentPreviewImages();
     void componentPreviewImageDecorationsReady();
-    void generateBonePreviewImages();
-    void bonePreviewImagesReady();
     void updateInprogressIndicator();
+    void updateTurnaroundShortcutsOverlay();
     void openRecentFile();
     void updateRecentFileActions();
     void toggleRenderColor();
@@ -100,6 +119,9 @@ public slots:
     void forceUpdateRenderModel();
     void updateRenderWireframe();
     void forceUpdateRenderWireframe();
+    void onBonesDockerVisibilityChanged(bool visible);
+    void onAnimationsDockerVisibilityChanged(bool visible);
+    void showKeyboardShortcuts();
 
 private:
     void setCurrentFilename(const QString& filename);
@@ -107,10 +129,12 @@ private:
     void initializeShortcuts();
     void initializeToolShortcuts(SkeletonGraphicsWidget* graphicsWidget);
     void initializeCanvasShortcuts(SkeletonGraphicsWidget* graphicsWidget);
+    void makeDockWidgetsNonFocusable();
     QShortcut* createShortcut(QKeySequence key);
     QString strippedName(const QString& fullFileName);
     bool openFiles(const QStringList& pathList);
     void reset();
+    void unifySnapshotEdgeLinkDirection(dust3d::Snapshot& snapshot);
 
     Document* m_document = nullptr;
     bool m_firstShow = true;
@@ -127,23 +151,37 @@ private:
     ModelWidget* m_modelRenderWidget = nullptr;
     SkeletonGraphicsWidget* m_canvasGraphicsWidget = nullptr;
     GraphicsContainerWidget* m_graphicsContainerWidget = nullptr;
-
+    TurnaroundOverlayWidget* m_turnaroundShortcutsOverlay = nullptr;
+    QWidget* m_turnaroundRecentFilesContainer = nullptr;
+    QVBoxLayout* m_turnaroundRecentFilesLayout = nullptr;
+    QWidget* m_leftToolPanel = nullptr;
     QMenu* m_fileMenu = nullptr;
-    QAction* m_newWindowAction = nullptr;
+    QMenu* m_editMenu = nullptr;
+    QAction* m_undoAction = nullptr;
+    QAction* m_redoAction = nullptr;
+    QAction* m_cutAction = nullptr;
+    QAction* m_copyAction = nullptr;
+    QAction* m_pasteAction = nullptr;
+    QAction* m_deleteAction = nullptr;
+    QAction* m_selectAllAction = nullptr;
+    QAction* m_keyboardShortcutsAction = nullptr;
     QAction* m_newDocumentAction = nullptr;
     QAction* m_openAction = nullptr;
-    QMenu* m_openExampleMenu = nullptr;
     QAction* m_saveAction = nullptr;
     QAction* m_saveAsAction = nullptr;
     QAction* m_saveAllAction = nullptr;
     QAction* m_changeTurnaroundAction = nullptr;
+    QAction* m_eraseTurnaroundAction = nullptr;
     std::vector<QAction*> m_recentFileActions;
     QAction* m_recentFileSeparatorAction = nullptr;
+    QAction* m_clearRecentFilesAction = nullptr;
     QAction* m_quitAction = nullptr;
 
     QAction* m_exportAsObjAction = nullptr;
     QAction* m_exportAsGlbAction = nullptr;
     QAction* m_exportAsFbxAction = nullptr;
+    QAction* m_exportAsGlbAndWavsAction = nullptr;
+    QAction* m_exportAsFbxAndWavsAction = nullptr;
 
     QMenu* m_viewMenu = nullptr;
     QAction* m_toggleWireframeAction = nullptr;
@@ -154,13 +192,13 @@ private:
     QMenu* m_windowMenu = nullptr;
     QAction* m_showPartsListAction = nullptr;
     QAction* m_showBonesListAction = nullptr;
+    QAction* m_showAnimationsListAction = nullptr;
     QAction* m_showDebugDialogAction = nullptr;
+    QAction* m_workflowReplayAction = nullptr;
 
     QMenu* m_helpMenu = nullptr;
     QAction* m_gotoHomepageAction = nullptr;
-    QAction* m_viewSourceAction = nullptr;
     QAction* m_aboutAction = nullptr;
-    QAction* m_checkForUpdatesAction = nullptr;
     QAction* m_reportIssuesAction = nullptr;
     QAction* m_seeContributorsAction = nullptr;
     QAction* m_seeSupportersAction = nullptr;
@@ -180,17 +218,24 @@ private:
     std::unique_ptr<ComponentPreviewImagesDecorator> m_componentPreviewImagesDecorator;
     bool m_isComponentPreviewImageDecorationsObsolete = false;
 
-    MeshPreviewImagesGenerator* m_bonePreviewImagesGenerator = nullptr;
-    bool m_isBonePreviewImagesObsolete = false;
-
     PartManageWidget* m_partManageWidget = nullptr;
     BoneManageWidget* m_boneManageWidget = nullptr;
+    AnimationManageWidget* m_animationManageWidget = nullptr;
+    QDockWidget* m_bonesDocker = nullptr;
+    QDockWidget* m_animationsDocker = nullptr;
+
+    bool m_savedXlockState = false;
+    bool m_savedYlockState = false;
+    bool m_savedZlockState = false;
+    bool m_savedRadiusLockState = false;
 
     SpinnableToolbarIcon* m_inprogressIndicator = nullptr;
 
     std::map<QKeySequence, QShortcut*> m_shortcutMap;
 
-    bool m_showBodyBonePreview = false;
+private:
+    static void ensureFileExtension(QString* filename, const QString& extension);
+    static QString exportedFilename(const QString& filename, const QString& extension);
 };
 
 #endif

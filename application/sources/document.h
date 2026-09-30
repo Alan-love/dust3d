@@ -1,6 +1,7 @@
 #ifndef DUST3D_APPLICATION_DOCUMENT_H_
 #define DUST3D_APPLICATION_DOCUMENT_H_
 
+#include "bone_structure.h"
 #include "debug.h"
 #include "model_mesh.h"
 #include "monochrome_mesh.h"
@@ -17,17 +18,21 @@
 #include <dust3d/base/snapshot.h>
 #include <dust3d/base/texture_type.h>
 #include <dust3d/base/uuid.h>
+#include <dust3d/mesh/mesh_generator.h>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
 class UvMapGenerator;
 class MeshGenerator;
-class BoneGenerator;
+class RigGeneratorWorker;
 
 class Document : public QObject {
     Q_OBJECT
 public:
+    // Qt resource paths of the rig templates compiled into the application
+    static const QStringList& rigTemplateFiles();
     enum class EditMode {
         Add = 0,
         Select,
@@ -37,8 +42,7 @@ public:
     enum class SnapshotFor {
         None = 0,
         Nodes = 0x00000001,
-        Bones = 0x00000002,
-        Document = (SnapshotFor::Nodes | SnapshotFor::Bones)
+        Document = (SnapshotFor::Nodes)
     };
 
     class HistoryItem {
@@ -77,10 +81,9 @@ public:
         dust3d::CutFace cutFace = dust3d::CutFace::Quad;
         dust3d::Uuid cutFaceLinkedId;
         bool hasCutFaceSettings = false;
+        float deformWidth = 1.0; // per-node cross-section scale (tapers that differ per direction)
+        float deformThickness = 1.0;
         std::vector<dust3d::Uuid> edgeIds;
-        std::set<dust3d::Uuid> boneIds;
-        std::set<dust3d::Uuid> asBontJoints;
-        bool boneJoint = false;
 
     private:
         float m_x = 0.0;
@@ -94,6 +97,7 @@ public:
         dust3d::Uuid id;
         dust3d::Uuid partId;
         QString name;
+        QString boneName;
         std::vector<dust3d::Uuid> nodeIds;
         dust3d::Uuid neighborOf(dust3d::Uuid nodeId) const;
     };
@@ -110,10 +114,11 @@ public:
         float deformThickness;
         float deformWidth;
         bool deformUnified;
+        bool interpolated; // false: no extra rings along long edges (rigid parts, fewer triangles)
+        bool hard; // hard-surface: joins other parts with a crisp boolean edge, no smooth bridging
         bool rounded;
         bool chamfered;
-        QColor color;
-        bool hasColor;
+        bool fillLoopInterior;
         dust3d::Uuid componentId;
         std::vector<dust3d::Uuid> nodeIds;
         bool dirty;
@@ -121,29 +126,12 @@ public:
         dust3d::CutFace cutFace;
         dust3d::Uuid cutFaceLinkedId;
         dust3d::PartTarget target;
-        float colorSolubility;
         float metalness;
         float roughness;
+        float emissive = 0.0f; // glow strength, 0..1: baked into the emissive texture on export
         float hollowThickness;
-        bool countershaded;
-        bool smooth;
-        dust3d::Uuid colorImageId;
+        dust3d::Uuid importedModelId;
         Part(const dust3d::Uuid& withId = dust3d::Uuid());
-        bool hasPolyFunction() const;
-        bool hasSmoothFunction() const;
-        bool hasSubdivFunction() const;
-        bool hasRoundEndFunction() const;
-        bool hasMirrorFunction() const;
-        bool hasChamferFunction() const;
-        bool hasRotationFunction() const;
-        bool hasHollowFunction() const;
-        bool hasCutFaceFunction() const;
-        bool hasLayerFunction() const;
-        bool hasTargetFunction() const;
-        bool hasBaseFunction() const;
-        bool hasCombineModeFunction() const;
-        bool hasDeformFunction() const;
-        bool hasColorFunction() const;
         void setDeformThickness(float toThickness);
         void setDeformWidth(float toWidth);
         void setCutRotation(float toRotation);
@@ -152,7 +140,6 @@ public:
         bool deformThicknessAdjusted() const;
         bool deformWidthAdjusted() const;
         bool deformAdjusted() const;
-        bool colorSolubilityAdjusted() const;
         bool metalnessAdjusted() const;
         bool roughnessAdjusted() const;
         bool cutRotationAdjusted() const;
@@ -186,8 +173,18 @@ public:
         QString name;
         dust3d::Uuid linkToPartId;
         dust3d::Uuid parentId;
+        QColor color = Qt::white;
+        bool hasColor = false;
+        dust3d::Uuid colorImageId;
         bool expanded = true;
         dust3d::CombineMode combineMode = dust3d::CombineMode::Normal;
+        bool sideClosed = false;
+        bool frontClosed = false;
+        bool backClosed = false;
+        float backCloseDepthRatio = 1.0;
+        float backCloseSharpness = 0.0;
+        size_t targetSegments = 0;
+        float smoothCutoffDegrees = 0.0;
         bool dirty = true;
         std::vector<dust3d::Uuid> childrenIds;
         bool isPreviewMeshObsolete = false;
@@ -200,22 +197,12 @@ public:
         std::set<dust3d::Uuid> m_childrenIdSet;
     };
 
-    class Bone {
+    class Animation {
     public:
         dust3d::Uuid id;
-        dust3d::Uuid attachBoneId;
-        int attachBoneJointIndex = 0;
-        std::vector<dust3d::Uuid> joints;
         QString name;
-        QPixmap previewPixmap;
-        bool isPreviewMeshObsolete = false;
-        void updatePreviewMesh(std::unique_ptr<ModelMesh> mesh);
-        ModelMesh* takePreviewMesh() const;
-
-        Bone(const dust3d::Uuid& withId = dust3d::Uuid());
-
-    private:
-        std::unique_ptr<ModelMesh> m_previewMesh;
+        QString type;
+        std::map<std::string, std::string> params; // Key-value parameters
     };
 
 signals:
@@ -224,10 +211,9 @@ signals:
     void partPreviewChanged(dust3d::Uuid partId);
     void resultMeshChanged();
     void resultComponentPreviewMeshesChanged();
-    void resultBonePreviewMeshesChanged();
-    void resultBodyBonePreviewMeshChanged();
     void turnaroundChanged();
     void editModeChanged();
+    void nodeAddProfileChanged(Document::Profile profile);
     void resultTextureChanged();
     void partSubdivStateChanged(dust3d::Uuid partId);
     void partXmirrorStateChanged(dust3d::Uuid partId);
@@ -235,19 +221,22 @@ signals:
     void partDeformWidthChanged(dust3d::Uuid partId);
     void partDeformUnifyStateChanged(dust3d::Uuid partId);
     void partRoundStateChanged(dust3d::Uuid partId);
-    void partColorStateChanged(dust3d::Uuid partId);
+    void partFillLoopInteriorStateChanged(dust3d::Uuid partId);
+    void componentColorStateChanged(const dust3d::Uuid& componentId);
     void partCutRotationChanged(dust3d::Uuid partId);
     void partCutFaceChanged(dust3d::Uuid partId);
     void partChamferStateChanged(dust3d::Uuid partId);
     void partTargetChanged(dust3d::Uuid partId);
-    void partColorSolubilityChanged(dust3d::Uuid partId);
     void partMetalnessChanged(dust3d::Uuid partId);
     void partRoughnessChanged(dust3d::Uuid partId);
     void partHollowThicknessChanged(dust3d::Uuid partId);
     void partCountershadeStateChanged(dust3d::Uuid partId);
-    void partSmoothStateChanged(dust3d::Uuid partId);
+    void partImportedModelIdChanged(dust3d::Uuid partId);
+    void componentSmoothCutoffDegreesChanged(dust3d::Uuid componentId);
+    void componentTargetSegmentsChanged(const dust3d::Uuid& componentId);
     void componentCombineModeChanged(dust3d::Uuid componentId);
     void cleanup();
+    void clearSelections();
     void checkPart(dust3d::Uuid partId);
     void partChecked(dust3d::Uuid partId);
     void partUnchecked(dust3d::Uuid partId);
@@ -257,8 +246,10 @@ signals:
     void uncheckAll();
     void checkNode(dust3d::Uuid nodeId);
     void checkEdge(dust3d::Uuid edgeId);
+    void pasteDone();
     void meshGenerating();
     void textureGenerating();
+    void rigGenerating();
     void textureChanged();
     void partAdded(dust3d::Uuid partId);
     void nodeAdded(dust3d::Uuid nodeId);
@@ -267,7 +258,7 @@ signals:
     void partLockStateChanged(dust3d::Uuid partId);
     void partVisibleStateChanged(dust3d::Uuid partId);
     void partDisableStateChanged(dust3d::Uuid partId);
-    void partColorImageChanged(const dust3d::Uuid& partId);
+    void componentColorImageChanged(const dust3d::Uuid& componentId);
     void componentNameChanged(dust3d::Uuid componentId);
     void componentChildrenChanged(dust3d::Uuid componentId);
     void componentRemoved(dust3d::Uuid componentId);
@@ -275,12 +266,17 @@ signals:
     void componentExpandStateChanged(dust3d::Uuid componentId);
     void componentPreviewMeshChanged(const dust3d::Uuid& componentId);
     void componentPreviewPixmapChanged(const dust3d::Uuid& componentId);
+    void componentSideCloseStateChanged(const dust3d::Uuid& componentId);
+    void componentFrontCloseStateChanged(const dust3d::Uuid& componentId);
+    void componentBackCloseStateChanged(const dust3d::Uuid& componentId);
+    void componentBackCloseDepthRatioChanged(const dust3d::Uuid& componentId);
+    void componentBackCloseSharpnessChanged(const dust3d::Uuid& componentId);
     void nodeRemoved(dust3d::Uuid nodeId);
     void edgeRemoved(dust3d::Uuid edgeId);
     void nodeRadiusChanged(dust3d::Uuid nodeId);
     void nodeOriginChanged(dust3d::Uuid nodeId);
-    void nodeBoneJointStateChanged(const dust3d::Uuid& nodeId);
     void edgeReversed(dust3d::Uuid edgeId);
+    void edgeNodeChanged(const dust3d::Uuid& edgeId);
     void originChanged();
     void skeletonChanged();
     void optionsChanged();
@@ -288,34 +284,28 @@ signals:
     void ylockStateChanged();
     void zlockStateChanged();
     void radiusLockStateChanged();
-    void boneAdded(const dust3d::Uuid& boneId);
-    void boneRemoved(const dust3d::Uuid& boneId);
-    void boneAttachmentChanged(const dust3d::Uuid& boneId);
-    void boneNodesChanged(const dust3d::Uuid& boneId);
-    void boneJointsChanged(const dust3d::Uuid& boneId);
-    void boneNameChanged(const dust3d::Uuid& boneId);
-    void bonePreviewMeshChanged(const dust3d::Uuid& boneId);
-    void bonePreviewPixmapChanged(const dust3d::Uuid& boneId);
-    void boneIdListChanged();
-    void rigChanged();
-    void boneGenerating();
-    void resultBoneChanged();
+    void rigTypeChanged(QString rigType);
+    void headHasEyelidsChanged(bool hasEyelids);
+    void resultRigChanged();
+    void animationAdded(dust3d::Uuid animationId);
+    void animationRemoved(dust3d::Uuid animationId);
+    void animationNameChanged(dust3d::Uuid animationId);
+    void animationTypeChanged(dust3d::Uuid animationId);
+    void animationParamsChanged(dust3d::Uuid animationId);
+    void animationsChanged();
 
 public: // need initialize
-    QImage* textureImage = nullptr;
-    QByteArray* textureImageByteArray = nullptr;
-    QImage* textureNormalImage = nullptr;
-    QByteArray* textureNormalImageByteArray = nullptr;
-    QImage* textureMetalnessImage = nullptr;
-    QByteArray* textureMetalnessImageByteArray = nullptr;
-    QImage* textureRoughnessImage = nullptr;
-    QByteArray* textureRoughnessImageByteArray = nullptr;
-    QImage* textureAmbientOcclusionImage = nullptr;
-    QByteArray* textureAmbientOcclusionImageByteArray = nullptr;
+    std::unique_ptr<QImage> textureImage;
+    std::unique_ptr<QImage> textureNormalImage;
+    std::unique_ptr<QImage> textureMetalnessImage;
+    std::unique_ptr<QImage> textureRoughnessImage;
+    std::unique_ptr<QImage> textureAmbientOcclusionImage;
+    std::unique_ptr<QImage> textureEmissiveImage;
     bool weldEnabled = true;
     float brushMetalness = ModelMesh::m_defaultMetalness;
     float brushRoughness = ModelMesh::m_defaultRoughness;
     EditMode editMode = EditMode::Select;
+    Profile nodeAddProfile = Profile::Main;
     bool xlocked = false;
     bool ylocked = false;
     bool zlocked = false;
@@ -327,8 +317,6 @@ public: // need initialize
     std::map<dust3d::Uuid, Edge> edgeMap;
     std::map<dust3d::Uuid, Component> componentMap;
     Component rootComponent;
-    std::map<dust3d::Uuid, Bone> boneMap;
-    std::vector<dust3d::Uuid> boneIdList;
 
 public:
     Document();
@@ -356,8 +344,6 @@ public:
     bool isMeshGenerationSucceed();
     ModelMesh* takeResultTextureMesh();
     quint64 resultTextureMeshId();
-    ModelMesh* takeResultBodyBonePreviewMesh();
-    quint64 resultBodyBonePreviewMeshId();
     quint64 resultTextureImageUpdateVersion();
     void updateTurnaround(const QImage& image);
     void clearTurnaround();
@@ -366,11 +352,13 @@ public:
     void updateTextureMetalnessImage(QImage* image);
     void updateTextureRoughnessImage(QImage* image);
     void updateTextureAmbientOcclusionImage(QImage* image);
+    void updateTextureEmissiveImage(QImage* image);
     const dust3d::Object& currentUvMappedObject() const;
+    const RigStructure& currentActualRigStructure() const;
     bool isExportReady() const;
     bool isMeshGenerating() const;
     bool isTextureGenerating() const;
-    bool isBoneGenerating() const;
+    bool isRigGenerating() const;
     void collectCutFaceList(std::vector<QString>& cutFaces) const;
     float getOriginX(bool rotated = false) const
     {
@@ -413,6 +401,33 @@ public:
     {
         m_originZ += originZ;
     }
+    QString getRigType() const
+    {
+        return m_rigType;
+    }
+    bool getHeadHasEyelids() const
+    {
+        return m_headHasEyelids;
+    }
+    const RigStructure& getActualRigStructure() const
+    {
+        return m_actualRigStructure;
+    }
+    dust3d::Object* takeRigObject() const
+    {
+        if (nullptr == m_rigObject)
+            return nullptr;
+        dust3d::Object* rigObject = new dust3d::Object(*m_rigObject);
+        return rigObject;
+    }
+    const dust3d::Object* currentRigObject() const
+    {
+        return m_rigObject.get();
+    }
+    bool hasRigWithBindings() const
+    {
+        return m_rigObject && !m_rigObject->vertices.empty() && !m_rigObject->vertexBone1.empty();
+    }
     const Node* findNode(dust3d::Uuid nodeId) const;
     const Edge* findEdge(dust3d::Uuid edgeId) const;
     const Part* findPart(dust3d::Uuid partId) const;
@@ -423,50 +438,54 @@ public:
     const Component* findComponentParent(dust3d::Uuid componentId) const;
     dust3d::Uuid findComponentParentId(dust3d::Uuid componentId) const;
     void collectComponentDescendantParts(dust3d::Uuid componentId, std::vector<dust3d::Uuid>& partIds) const;
+    dust3d::Uuid componentToLinkedPartId(const dust3d::Uuid& componentId);
     void collectComponentDescendantComponents(dust3d::Uuid componentId, std::vector<dust3d::Uuid>& componentIds) const;
     void setComponentPreviewMesh(const dust3d::Uuid& componentId, std::unique_ptr<ModelMesh> mesh);
     void setComponentPreviewImage(const dust3d::Uuid& componentId, std::unique_ptr<QImage> image);
     void resetDirtyFlags();
     void markAllDirty();
-    const Bone* findBone(const dust3d::Uuid& boneId) const;
-    void setBonePreviewMesh(const dust3d::Uuid& boneId, std::unique_ptr<ModelMesh> mesh);
-    void setBonePreviewPixmap(const dust3d::Uuid& boneId, const QPixmap& pixmap);
 
 public slots:
+    bool hasAnimation(const dust3d::Uuid& animationId) const;
+    const Animation* findAnimation(const dust3d::Uuid& animationId) const;
+    void getAllAnimationIds(std::vector<dust3d::Uuid>& animationIds) const;
     void undo();
     void redo();
     void paste();
+    void pasteFromXmlFile(const QString& filePath);
     void setNodeCutRotation(dust3d::Uuid nodeId, float cutRotation);
     void setNodeCutFace(dust3d::Uuid nodeId, dust3d::CutFace cutFace);
     void setNodeCutFaceLinkedId(dust3d::Uuid nodeId, dust3d::Uuid linkedId);
     void clearNodeCutFaceSettings(dust3d::Uuid nodeId);
     void setEditMode(EditMode mode);
+    void setNodeAddProfile(Profile profile);
     void uiReady();
     void generateMesh();
     void regenerateMesh();
     void meshReady();
     void generateTexture();
     void textureReady();
-    void generateBone();
-    void boneReady();
     void setPartSubdivState(dust3d::Uuid partId, bool subdived);
     void setPartXmirrorState(dust3d::Uuid partId, bool mirrored);
     void setPartDeformThickness(dust3d::Uuid partId, float thickness);
     void setPartDeformWidth(dust3d::Uuid partId, float width);
     void setPartDeformUnified(dust3d::Uuid partId, bool unified);
     void setPartRoundState(dust3d::Uuid partId, bool rounded);
-    void setPartColorState(dust3d::Uuid partId, bool hasColor, QColor color);
+    void setPartFillLoopInteriorState(dust3d::Uuid partId, bool fill);
     void setPartCutRotation(dust3d::Uuid partId, float cutRotation);
     void setPartCutFace(dust3d::Uuid partId, dust3d::CutFace cutFace);
     void setPartCutFaceLinkedId(dust3d::Uuid partId, dust3d::Uuid linkedId);
     void setPartChamferState(dust3d::Uuid partId, bool chamfered);
+    void setPartHardState(dust3d::Uuid partId, bool hard);
+    void setPartInterpolatedState(dust3d::Uuid partId, bool interpolated);
     void setPartTarget(dust3d::Uuid partId, dust3d::PartTarget target);
-    void setPartColorSolubility(dust3d::Uuid partId, float solubility);
     void setPartMetalness(dust3d::Uuid partId, float metalness);
     void setPartRoughness(dust3d::Uuid partId, float roughness);
+    void setPartEmissive(dust3d::Uuid partId, float emissive);
     void setPartHollowThickness(dust3d::Uuid partId, float hollowThickness);
-    void setPartCountershaded(dust3d::Uuid partId, bool countershaded);
-    void setPartSmoothState(dust3d::Uuid partId, bool smooth);
+    void setPartImportedModelId(dust3d::Uuid partId, dust3d::Uuid importedModelId);
+    void setComponentSmoothCutoffDegrees(dust3d::Uuid componentId, float degrees);
+    void setComponentTargetSegments(const dust3d::Uuid& componentId, size_t targetSegments);
     void setComponentCombineMode(dust3d::Uuid componentId, dust3d::CombineMode combineMode);
     void saveSnapshot();
     void batchChangeBegin();
@@ -474,6 +493,7 @@ public slots:
     void reset();
     void clearHistories();
     void silentReset();
+    void clearResults();
     void toggleSmoothNormal();
     void enableWeld(bool enabled);
     void removeNode(dust3d::Uuid nodeId);
@@ -485,14 +505,15 @@ public slots:
     void moveNodeBy(dust3d::Uuid nodeId, float x, float y, float z);
     void setNodeOrigin(dust3d::Uuid nodeId, float x, float y, float z);
     void setNodeRadius(dust3d::Uuid nodeId, float radius);
-    void setNodeBoneJointState(const dust3d::Uuid& nodeId, bool boneJoint);
     void switchNodeXZ(dust3d::Uuid nodeId);
     void moveOriginBy(float x, float y, float z);
     void addEdge(dust3d::Uuid fromNodeId, dust3d::Uuid toNodeId);
+    void setEdgeBoneName(dust3d::Uuid edgeId, const QString& boneName);
     void moveComponentUp(dust3d::Uuid componentId);
     void moveComponentDown(dust3d::Uuid componentId);
     void moveComponentToTop(dust3d::Uuid componentId);
     void moveComponentToBottom(dust3d::Uuid componentId);
+    void moveComponentToIndex(dust3d::Uuid componentId, int targetIndex);
     void renameComponent(dust3d::Uuid componentId, QString name);
     void removeComponent(dust3d::Uuid componentId);
     void addComponent(dust3d::Uuid parentId);
@@ -502,8 +523,16 @@ public slots:
     void ungroupComponent(const dust3d::Uuid& componentId);
     void createNewChildComponent(dust3d::Uuid parentComponentId);
     void setComponentExpandState(dust3d::Uuid componentId, bool expanded);
+    void setComponentSideCloseState(const dust3d::Uuid& componentId, bool closed);
+    void setComponentFrontCloseState(const dust3d::Uuid& componentId, bool closed);
+    void setComponentBackCloseState(const dust3d::Uuid& componentId, bool closed);
+    void setComponentBackCloseDepthRatio(const dust3d::Uuid& componentId, float depthRatio);
+    void setComponentBackCloseSharpness(const dust3d::Uuid& componentId, float sharpness);
     void hideOtherComponents(dust3d::Uuid componentId);
+    void showAllOrHideOtherComponents(dust3d::Uuid componentId);
     void lockOtherComponents(dust3d::Uuid componentId);
+    void setComponentColorState(const dust3d::Uuid& componentId, bool hasColor, QColor color);
+    void setComponentColorImage(const dust3d::Uuid& componentId, const dust3d::Uuid& imageId);
     void hideAllComponents();
     void showAllComponents();
     void showOrHideAllComponents();
@@ -519,7 +548,6 @@ public slots:
     void setPartLockState(dust3d::Uuid partId, bool locked);
     void setPartVisibleState(dust3d::Uuid partId, bool visible);
     void setPartDisableState(dust3d::Uuid partId, bool disabled);
-    void setPartColorImage(const dust3d::Uuid& partId, const dust3d::Uuid& imageId);
     void enableAllPositionRelatedLocks();
     void disableAllPositionRelatedLocks();
     bool isPartReadonly(dust3d::Uuid partId) const;
@@ -530,16 +558,16 @@ public slots:
     void setYlockState(bool locked);
     void setZlockState(bool locked);
     void setRadiusLockState(bool locked);
-    void addBone(const dust3d::Uuid& boneId);
-    void addNodesToBone(const dust3d::Uuid& boneId, const std::vector<dust3d::Uuid>& nodeIds);
-    void removeNodesFromBone(const dust3d::Uuid& boneId, const std::vector<dust3d::Uuid>& nodeIds);
-    void removeBone(const dust3d::Uuid& boneId);
-    void setBoneAttachment(const dust3d::Uuid& boneId, const dust3d::Uuid& toBoneId, int toBoneJointIndex);
-    void renameBone(const dust3d::Uuid& boneId, const QString& name);
-    void applyBoneJoints(const dust3d::Uuid& boneId, const std::vector<dust3d::Uuid>& nodeIds);
-    void startBoneJointsPicking(const dust3d::Uuid& boneId, size_t boneJoints);
-    void stopBoneJointsPicking();
-    void pickBoneNode(const dust3d::Uuid& nodeId);
+    void setRigType(QString rigType);
+    void setHeadHasEyelids(bool hasEyelids);
+    void generateRig();
+    void rigReady();
+    void createAnimation(const dust3d::Uuid& animationId, const QString& name, const QString& type);
+    void setAnimationName(const dust3d::Uuid& animationId, const QString& name);
+    void setAnimationType(const dust3d::Uuid& animationId, const QString& type);
+    void setAnimationParams(const dust3d::Uuid& animationId, const std::map<std::string, std::string>& params);
+    void deleteAnimation(const dust3d::Uuid& animationId);
+    void duplicateAnimation(const dust3d::Uuid& animationId);
 
 private:
     void resolveSnapshotBoundingBox(const dust3d::Snapshot& snapshot, QRectF* mainProfile, QRectF* sideProfile);
@@ -554,37 +582,41 @@ private:
     void removeComponentRecursively(dust3d::Uuid componentId);
     void updateLinkedPart(dust3d::Uuid oldPartId, dust3d::Uuid newPartId);
     dust3d::Uuid createNode(dust3d::Uuid nodeId, float x, float y, float z, float radius, dust3d::Uuid fromNodeId);
-    void resetCurrentBone();
 
     bool m_isResultMeshObsolete = false;
     MeshGenerator* m_meshGenerator = nullptr;
-    ModelMesh* m_resultMesh = nullptr;
+    QThread* m_meshGeneratorThread = nullptr;
+    std::unique_ptr<ModelMesh> m_resultMesh;
     std::unique_ptr<MonochromeMesh> m_wireframeMesh;
     bool m_isMeshGenerationSucceed = true;
     int m_batchChangeRefCount = 0;
-    dust3d::Object* m_currentObject = nullptr;
+    std::unique_ptr<dust3d::Object> m_currentObject;
+    std::unique_ptr<dust3d::Snapshot> m_currentSnapshot;
     bool m_isTextureObsolete = false;
     UvMapGenerator* m_textureGenerator = nullptr;
     std::unique_ptr<dust3d::Object> m_uvMappedObject = std::make_unique<dust3d::Object>();
-    ModelMesh* m_resultTextureMesh = nullptr;
+    std::unique_ptr<ModelMesh> m_resultTextureMesh;
     quint64 m_textureImageUpdateVersion = 0;
     bool m_smoothNormal = false;
     quint64 m_meshGenerationId = 0;
     quint64 m_nextMeshGenerationId = 0;
-    void* m_generatedCacheContext = nullptr;
+    std::unique_ptr<dust3d::MeshGenerator::GeneratedCacheContext> m_generatedCacheContext;
     float m_originX = 0;
     float m_originY = 0;
     float m_originZ = 0;
+    QString m_rigType = "None";
+    bool m_headHasEyelids = false;
     dust3d::Uuid m_currentCanvasComponentId;
     bool m_allPositionRelatedLocksEnabled = true;
-
-    dust3d::Uuid m_currentBondId;
-    size_t m_currentBoneJoints = 0;
-    std::vector<dust3d::Uuid> m_currentBoneJointNodes;
-
-    std::unique_ptr<BoneGenerator> m_boneGenerator;
-    bool m_isResultBoneObsolete = false;
-    std::unique_ptr<ModelMesh> m_resultBodyBonePreviewMesh;
+    std::map<QString, RigStructure> m_rigStructures;
+    RigGeneratorWorker* m_rigGeneratorWorker = nullptr;
+    bool m_isRigObsolete = false;
+    RigStructure m_actualRigStructure;
+    std::unique_ptr<dust3d::Object> m_rigObject;
+    void loadRigStructures();
+    bool loadRigFromXml(const QString& filePath);
+    std::map<dust3d::Uuid, Animation> m_animations;
+    dust3d::Uuid m_currentAnimationId;
 
 private:
     static unsigned long m_maxSnapshot;

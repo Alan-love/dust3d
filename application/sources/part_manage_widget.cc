@@ -1,9 +1,11 @@
 #include "part_manage_widget.h"
+#include "component_breadcrumb_widget.h"
 #include "component_list_model.h"
 #include "component_preview_grid_widget.h"
 #include "component_property_widget.h"
 #include "document.h"
 #include "theme.h"
+#include <QFile>
 #include <QMenu>
 #include <QVBoxLayout>
 #include <QWidgetAction>
@@ -16,26 +18,26 @@ PartManageWidget::PartManageWidget(Document* document, QWidget* parent)
 
     QHBoxLayout* toolsLayout = new QHBoxLayout;
     toolsLayout->setSpacing(0);
-    toolsLayout->setMargin(0);
+    toolsLayout->setContentsMargins(0, 0, 0, 0);
 
     setStyleSheet("QPushButton:disabled {border: 0; color: " + Theme::gray.name() + "}");
 
-    auto createButton = [](QChar icon, const QString& title) {
-        QPushButton* button = new QPushButton(icon);
+    auto createButton = [](QIcon icon, const QString& title) {
+        QPushButton* button = new QPushButton(icon, "");
         Theme::initIconButton(button);
         button->setToolTip(title);
         return button;
     };
 
-    m_levelUpButton = createButton(QChar(fa::levelup), tr("Go level up"));
-    m_selectButton = createButton(QChar(fa::objectgroup), tr("Select them on canvas"));
-    m_lockButton = createButton(QChar(fa::lock), tr("Lock them on canvas"));
-    m_unlockButton = createButton(QChar(fa::unlock), tr("Unlock them on canvas"));
-    m_showButton = createButton(QChar(fa::eye), tr("Show them on canvas"));
-    m_hideButton = createButton(QChar(fa::eyeslash), tr("Hide them on canvas"));
-    m_unlinkButton = createButton(QChar(fa::unlink), tr("Exclude them from result generation"));
-    m_linkButton = createButton(QChar(fa::link), tr("Include them in result generation"));
-    m_propertyButton = createButton(QChar(fa::sliders), tr("Configure properties"));
+    m_levelUpButton = createButton(Theme::awesome()->icon(fa::levelup), tr("Go level up"));
+    m_selectButton = createButton(Theme::awesome()->icon(fa::objectgroup), tr("Select them on canvas"));
+    m_lockButton = createButton(Theme::awesome()->icon(fa::lock), tr("Lock them on canvas (L)"));
+    m_unlockButton = createButton(Theme::awesome()->icon(fa::unlock), tr("Unlock them on canvas (L)"));
+    m_showButton = createButton(Theme::awesome()->icon(fa::eye), tr("Show them on canvas (H)"));
+    m_hideButton = createButton(Theme::awesome()->icon(fa::eyeslash), tr("Hide them on canvas (H)"));
+    m_unlinkButton = createButton(Theme::awesome()->icon(fa::unlink), tr("Exclude them from result generation (J)"));
+    m_linkButton = createButton(Theme::awesome()->icon(fa::link), tr("Include them in result generation (J)"));
+    m_propertyButton = createButton(Theme::awesome()->icon(fa::sliders), tr("Configure properties"));
 
     toolsLayout->addWidget(m_levelUpButton);
     toolsLayout->addWidget(m_selectButton);
@@ -55,8 +57,20 @@ PartManageWidget::PartManageWidget(Document* document, QWidget* parent)
 
     m_componentPreviewGridWidget = new ComponentPreviewGridWidget(document);
 
+    m_breadcrumbWidget = new ComponentBreadcrumbWidget(document);
+    m_breadcrumbWidget->setCurrentComponentId(dust3d::Uuid());
+
     connect(m_componentPreviewGridWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, &PartManageWidget::updateToolButtons);
     connect(m_componentPreviewGridWidget->componentListModel(), &ComponentListModel::listingComponentChanged, this, &PartManageWidget::updateLevelUpButton);
+    connect(m_componentPreviewGridWidget->componentListModel(), &ComponentListModel::listingComponentChanged, [this](const dust3d::Uuid& componentId) {
+        m_breadcrumbWidget->setCurrentComponentId(componentId);
+    });
+    connect(m_breadcrumbWidget, &ComponentBreadcrumbWidget::navigateToComponent, [this](const dust3d::Uuid& componentId) {
+        m_componentPreviewGridWidget->componentListModel()->setListingComponentId(componentId);
+    });
+    connect(m_document, &Document::componentPreviewPixmapChanged, [this](const dust3d::Uuid&) {
+        m_breadcrumbWidget->updateThumbnails();
+    });
     connect(m_componentPreviewGridWidget, &ComponentPreviewGridWidget::unselectAllOnCanvas, this, &PartManageWidget::unselectAllOnCanvas);
     connect(m_componentPreviewGridWidget, &ComponentPreviewGridWidget::selectPartOnCanvas, this, &PartManageWidget::selectPartOnCanvas);
 
@@ -119,13 +133,20 @@ PartManageWidget::PartManageWidget(Document* document, QWidget* parent)
     connect(m_document, &Document::componentChildrenChanged, this, &PartManageWidget::updateToolButtons);
 
     connect(this, &PartManageWidget::groupComponents, m_document, &Document::groupComponents);
+    connect(this, &PartManageWidget::removeComponent, m_document, &Document::removeComponent);
     connect(this, &PartManageWidget::ungroupComponent, m_document, &Document::ungroupComponent);
+    connect(this, &PartManageWidget::moveComponentUp, m_document, &Document::moveComponentUp);
+    connect(this, &PartManageWidget::moveComponentDown, m_document, &Document::moveComponentDown);
+    connect(this, &PartManageWidget::moveComponentToTop, m_document, &Document::moveComponentToTop);
+    connect(this, &PartManageWidget::moveComponentToBottom, m_document, &Document::moveComponentToBottom);
+    connect(this, &PartManageWidget::setPartTarget, m_document, &Document::setPartTarget);
     connect(this, &PartManageWidget::groupOperationAdded, m_document, &Document::saveSnapshot);
 
     connect(this, &PartManageWidget::customContextMenuRequested, this, &PartManageWidget::showContextMenu);
 
     QVBoxLayout* mainLayout = new QVBoxLayout;
     mainLayout->addWidget(toolsWidget);
+    mainLayout->addWidget(m_breadcrumbWidget);
     mainLayout->addWidget(m_componentPreviewGridWidget);
 
     setLayout(mainLayout);
@@ -142,17 +163,39 @@ void PartManageWidget::showSelectedComponentProperties()
 
     auto* propertyWidget = new ComponentPropertyWidget(m_document, componentIds);
 
-    auto menu = std::make_unique<QMenu>(this->parentWidget());
-    QWidgetAction* widgetAction = new QWidgetAction(menu.get());
+    m_contextMenu.reset(new QMenu(this->parentWidget()));
+    QWidgetAction* widgetAction = new QWidgetAction(m_contextMenu.get());
     widgetAction->setDefaultWidget(propertyWidget);
-    menu->addAction(widgetAction);
+    m_contextMenu->addAction(widgetAction);
 
     auto x = mapToGlobal(QPoint(0, 0)).x();
     if (x <= 0)
         x = QCursor::pos().x();
-    menu->exec(QPoint(
+    m_contextMenu->popup(QPoint(
         x - propertyWidget->width(),
         QCursor::pos().y()));
+}
+
+void PartManageWidget::showComponentPropertyForParts(std::set<dust3d::Uuid> partIds)
+{
+    std::vector<dust3d::Uuid> componentIds;
+    for (const auto& partId : partIds) {
+        const auto* part = m_document->findPart(partId);
+        if (nullptr == part)
+            continue;
+        componentIds.push_back(part->componentId);
+    }
+    if (componentIds.empty())
+        return;
+
+    auto* propertyWidget = new ComponentPropertyWidget(m_document, componentIds);
+
+    m_contextMenu.reset(new QMenu(this->parentWidget()));
+    QWidgetAction* widgetAction = new QWidgetAction(m_contextMenu.get());
+    widgetAction->setDefaultWidget(propertyWidget);
+    m_contextMenu->addAction(widgetAction);
+
+    m_contextMenu->popup(QCursor::pos());
 }
 
 void PartManageWidget::selectComponentByPartId(const dust3d::Uuid& partId)
@@ -246,25 +289,148 @@ void PartManageWidget::showContextMenu(const QPoint& pos)
     if (selectedComponentIds.empty())
         return;
 
-    QMenu contextMenu(this);
+    m_contextMenu.reset(new QMenu(this));
 
-    QAction makeGroupAction(tr("Make group"), this);
-    makeGroupAction.setIcon(Theme::awesome()->icon(fa::folder));
-    connect(&makeGroupAction, &QAction::triggered, this, [=]() {
+    QAction* makeGroupAction = new QAction(tr("Make group"), m_contextMenu.get());
+    makeGroupAction->setIcon(Theme::awesome()->icon(fa::folder));
+    connect(makeGroupAction, &QAction::triggered, this, [=]() {
         emit this->groupComponents(selectedComponentIds);
         emit this->groupOperationAdded();
     });
-    contextMenu.addAction(&makeGroupAction);
+    m_contextMenu->addAction(makeGroupAction);
 
-    QAction ungroupAction(tr("Ungroup"), this);
+    QAction* ungroupAction = new QAction(tr("Ungroup"), m_contextMenu.get());
     if (hasSelectedGroupedComponent()) {
-        connect(&ungroupAction, &QAction::triggered, this, [=]() {
+        connect(ungroupAction, &QAction::triggered, this, [=]() {
             for (const auto& it : selectedComponentIds)
                 emit this->ungroupComponent(it);
             emit this->groupOperationAdded();
         });
-        contextMenu.addAction(&ungroupAction);
+        m_contextMenu->addAction(ungroupAction);
     }
 
-    contextMenu.exec(mapToGlobal(pos));
+    QAction* moveToTopAction = new QAction(tr("Begin"), m_contextMenu.get());
+    QAction* moveUpAction = new QAction(tr("Previous"), m_contextMenu.get());
+    QAction* moveDownAction = new QAction(tr("Next"), m_contextMenu.get());
+    QAction* moveToBottomAction = new QAction(tr("End"), m_contextMenu.get());
+    if (1 == selectedComponentIds.size()) {
+        QMenu* moveToMenu = m_contextMenu->addMenu(tr("Move To"));
+
+        moveToTopAction->setIcon(Theme::awesome()->icon(fa::angledoubleup));
+        connect(moveToTopAction, &QAction::triggered, [=]() {
+            for (const auto& it : selectedComponentIds)
+                emit moveComponentToTop(it);
+            emit groupOperationAdded();
+        });
+        moveToMenu->addAction(moveToTopAction);
+
+        moveUpAction->setIcon(Theme::awesome()->icon(fa::angleup));
+        connect(moveUpAction, &QAction::triggered, [=]() {
+            for (const auto& it : selectedComponentIds)
+                emit moveComponentUp(it);
+            emit groupOperationAdded();
+        });
+        moveToMenu->addAction(moveUpAction);
+
+        moveDownAction->setIcon(Theme::awesome()->icon(fa::angledown));
+        connect(moveDownAction, &QAction::triggered, [=]() {
+            for (const auto& it : selectedComponentIds)
+                emit moveComponentDown(it);
+            emit groupOperationAdded();
+        });
+        moveToMenu->addAction(moveDownAction);
+
+        moveToBottomAction->setIcon(Theme::awesome()->icon(fa::angledoubledown));
+        connect(moveToBottomAction, &QAction::triggered, [=]() {
+            for (const auto& it : selectedComponentIds)
+                emit moveComponentToBottom(it);
+            emit groupOperationAdded();
+        });
+        moveToMenu->addAction(moveToBottomAction);
+
+        moveToMenu->addSeparator();
+    }
+
+    auto selectedPartIds = m_componentPreviewGridWidget->getSelectedPartIds();
+    if (!selectedPartIds.empty()) {
+        QMenu* partRoleMenu = m_contextMenu->addMenu(tr("Part Role"));
+        struct RoleEntry {
+            QString label;
+            dust3d::PartTarget target;
+        };
+        RoleEntry roles[] = {
+            { tr("Model"), dust3d::PartTarget::Model },
+            { tr("Cut Face"), dust3d::PartTarget::CutFace },
+            { tr("Stitching Line"), dust3d::PartTarget::StitchingLine },
+            { tr("Stitching Loop"), dust3d::PartTarget::StitchingLoop },
+            { tr("Imported Model"), dust3d::PartTarget::ImportedModel },
+        };
+        for (const auto& role : roles) {
+            QAction* action = new QAction(role.label, partRoleMenu);
+            bool allMatch = true;
+            for (const auto& it : selectedPartIds) {
+                const Document::Part* part = m_document->findPart(it);
+                if (part->target != role.target) {
+                    allMatch = false;
+                    break;
+                }
+            }
+            action->setCheckable(true);
+            action->setChecked(allMatch);
+            dust3d::PartTarget target = role.target;
+            connect(action, &QAction::triggered, this, [=]() {
+                for (const auto& it : selectedPartIds)
+                    emit this->setPartTarget(it, target);
+                if (selectedPartIds.size() > 1
+                    && (target == dust3d::PartTarget::StitchingLine || target == dust3d::PartTarget::StitchingLoop)) {
+                    std::vector<dust3d::Uuid> componentIds;
+                    for (const auto& partId : selectedPartIds) {
+                        const Document::Part* part = m_document->findPart(partId);
+                        if (part && !part->componentId.isNull())
+                            componentIds.push_back(part->componentId);
+                    }
+                    if (componentIds.size() > 1) {
+                        const auto* first = m_document->findComponent(componentIds.front());
+                        bool alreadyGrouped = first && !first->parentId.isNull();
+                        if (alreadyGrouped) {
+                            auto groupId = first->parentId;
+                            const auto* group = m_document->findComponent(groupId);
+                            if (group && !group->linkToPartId.isNull())
+                                alreadyGrouped = false;
+                            else {
+                                for (size_t i = 1; i < componentIds.size(); ++i) {
+                                    const auto* c = m_document->findComponent(componentIds[i]);
+                                    if (!c || c->parentId != groupId) {
+                                        alreadyGrouped = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (alreadyGrouped) {
+                            m_componentPreviewGridWidget->componentListModel()->setListingComponentId(first->parentId);
+                        } else {
+                            emit this->groupComponents(componentIds);
+                            const auto* child = m_document->findComponent(componentIds.front());
+                            if (child && !child->parentId.isNull())
+                                m_componentPreviewGridWidget->componentListModel()->setListingComponentId(child->parentId);
+                        }
+                    }
+                }
+                emit this->groupOperationAdded();
+            });
+            partRoleMenu->addAction(action);
+        }
+    }
+
+    QAction* deleteAction = new QAction(tr("Delete"), m_contextMenu.get());
+    deleteAction->setIcon(Theme::awesome()->icon(fa::remove));
+    connect(deleteAction, &QAction::triggered, this, [=]() {
+        for (const auto& componentId : selectedComponentIds)
+            emit this->removeComponent(componentId);
+        emit this->groupOperationAdded();
+    });
+    m_contextMenu->addAction(deleteAction);
+
+    m_contextMenu->popup(mapToGlobal(pos));
 }

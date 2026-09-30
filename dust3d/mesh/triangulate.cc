@@ -22,8 +22,6 @@
 
 #include <array>
 #include <dust3d/base/vector2.h>
-#include <dust3d/mesh/isotropic_halfedge_mesh.h>
-#include <dust3d/mesh/isotropic_remesher.h>
 #include <dust3d/mesh/triangulate.h>
 #include <mapbox/earcut.hpp>
 
@@ -43,23 +41,35 @@ void triangulate(const std::vector<Vector3>& vertices,
         return;
     }
 
+    // Newell's method: the polygon's normal, robust for concave outlines (an I-beam or an L
+    // section), where summing corner normals cancels out at the reflex corners
     Vector3 normal;
     for (size_t i = 0; i < faceIndices.size(); ++i) {
         auto j = (i + 1) % faceIndices.size();
-        auto k = (i + 2) % faceIndices.size();
-        const auto& enter = vertices[faceIndices[i]];
-        const auto& cone = vertices[faceIndices[j]];
-        const auto& leave = vertices[faceIndices[k]];
-        normal += Vector3::normal(enter, cone, leave);
+        const auto& a = vertices[faceIndices[i]];
+        const auto& b = vertices[faceIndices[j]];
+        normal += Vector3((a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()));
     }
     normal.normalize();
-
-    Vector3 axis = (vertices[1] - vertices[0]).normalized();
-    Vector3 origin = vertices[0];
 
     std::vector<Vector3> pointsIn3d(faceIndices.size());
     for (size_t i = 0; i < faceIndices.size(); ++i)
         pointsIn3d[i] = vertices[faceIndices[i]];
+
+    // an in-plane axis from the face's own points (not the mesh's first two vertices, which
+    // may have nothing to do with this face, or lie along its normal)
+    Vector3 origin = pointsIn3d[0];
+    Vector3 axis;
+    for (size_t i = 1; i < pointsIn3d.size(); ++i) {
+        Vector3 d = pointsIn3d[i] - origin;
+        d -= normal * Vector3::dotProduct(d, normal);
+        if (d.lengthSquared() > 1e-18) {
+            axis = d.normalized();
+            break;
+        }
+    }
 
     std::vector<Vector2> pointsIn2d;
     Vector3::project(pointsIn3d, &pointsIn2d,
@@ -93,48 +103,6 @@ void triangulate(const std::vector<Vector3>& vertices,
             continue;
         }
         triangulate(vertices, faceIndices, triangles);
-    }
-}
-
-void isotropicTriangulate(std::vector<Vector3>& vertices,
-    const std::vector<size_t>& faceIndices,
-    std::vector<std::vector<size_t>>* triangles)
-{
-    if (faceIndices.empty())
-        return;
-
-    double edgeLength = 0.0;
-    for (size_t i = 0; i < faceIndices.size(); ++i) {
-        size_t j = (i + 1) % faceIndices.size();
-        edgeLength += (vertices[faceIndices[i]] - vertices[faceIndices[j]]).length();
-    }
-    double targetEdgeLength = 1.2 * edgeLength / faceIndices.size();
-
-    std::vector<std::vector<size_t>> firstStepTriangles;
-    triangulate(vertices, faceIndices, &firstStepTriangles);
-
-    IsotropicRemesher isotropicRemesher(&vertices, &firstStepTriangles);
-    isotropicRemesher.setTargetEdgeLength(targetEdgeLength);
-    isotropicRemesher.remesh(3);
-
-    size_t outputIndex = vertices.size();
-    IsotropicHalfedgeMesh* halfedgeMesh = isotropicRemesher.remeshedHalfedgeMesh();
-    for (IsotropicHalfedgeMesh::Vertex* vertex = halfedgeMesh->moveToNextVertex(nullptr);
-         nullptr != vertex;
-         vertex = halfedgeMesh->moveToNextVertex(vertex)) {
-        if (-1 != vertex->sourceIndex)
-            continue;
-        vertex->sourceIndex = outputIndex++;
-        vertices.push_back({ vertex->position[0],
-            vertex->position[1],
-            vertex->position[2] });
-    }
-    for (IsotropicHalfedgeMesh::Face* face = halfedgeMesh->moveToNextFace(nullptr);
-         nullptr != face;
-         face = halfedgeMesh->moveToNextFace(face)) {
-        triangles->push_back({ (size_t)face->halfedge->previousHalfedge->startVertex->sourceIndex,
-            (size_t)face->halfedge->startVertex->sourceIndex,
-            (size_t)face->halfedge->nextHalfedge->startVertex->sourceIndex });
     }
 }
 

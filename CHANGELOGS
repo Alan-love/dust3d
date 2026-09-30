@@ -1,0 +1,394 @@
+1.1.6 (Jun 9, 2026):
+
+Animation
+- Added cape rig and cloth physics simulation for biped and bird rigs
+
+UI
+- Renamed "Break" node action to "Split"
+- Fixed null pointer dereference crash in component property widget
+
+1.1.5 (Jun 5, 2026):
+
+UV
+- Fixed white seam artifacts on exported textures
+
+1.1.4 (Jun 4, 2026):
+
+Animation
+- Fixed bird die animation
+- Added penguin walk and run animations
+
+Rigging
+- Patched bird bone directions
+
+UI
+- Added info banner for stitching parts
+
+1.1.3 (May 31, 2026):
+
+UI
+- Fixed canvas losing focus after certain interactions
+- Fixed stitching loop property widget not resizing when back-close controls are toggled
+- Added Edit menu and View menu shortcut hints
+- Added Keyboard Shortcuts dialog
+
+1.1.2 (May 30, 2026):
+
+UV
+- Fixed imported-model texture distortion without introducing seams: bleed border
+  is now filled separately from the chart region so per-vertex UV coordinates are
+  rendered at their correct, undistorted scale
+
+UI
+- Added breadcrumb bar above the parts panel for navigating into and out of nested
+  component groups; supports drag-and-drop to re-parent components to an ancestor
+- Added "Replay Steps" window (Window > Replay Steps) to automatically play back or
+  manually step through the full sequence of mesh, bone, and animation edits
+
+1.1.1 (May 27, 2026):
+
+Mesh
+- Improved mesh boolean algorithm to handle non-watertight meshes
+
+1.1.0 (May 24, 2026):
+
+Mesh
+- Added "Stitching Loop" mode to build human face-like meshes
+- Added .glb file import support
+
+Animation
+- Added eyelid blink animation for rigged characters
+- Fixed biped die animation head always pointing upwards
+- Fixed quadruped roar by chaining foot bone to lower leg end to eliminate gap
+
+Rigging
+- Aligned quadruped foot bone starts to lower leg ends
+
+UI
+- Added auto group stitching parts
+- Added document path to recent files on save
+- Replaced hide/wireframe toggles with labeled checkboxes in animation preview
+- Updated font size to 12px
+- Removed the minimal theme
+- Updated transparency of stitching preview base model
+- Updated part preview image size
+- Improved cut face preview
+- Updated part role controls style
+- Fixed animation manage widget not clearing list when opening file without animations
+- Fixed animation preview not showing texture
+- Fixed overlay not hiding on file open and ds3 bounds overflow
+
+Build & CI
+- Added test report generation
+- Updated Ubuntu AppImage test step
+
+1.0.3 (May 13, 2026):
+
+Build & CI
+- Fixed AppImage missing libfontconfig.so.1.
+- Updated AppImage bundle.sh to use latest linuxdeployqt and appimagetool.
+
+1.0.2 (May 10, 2026):
+
+Animation
+- Added hair physics to biped rig: three hair bones (HairBack1/2/3) with Verlet
+  integration (stiffness, damping, gravity), loop-seamless on all cycling animations
+- Added biped attack animations: BipedSlam, BipedStab, BipedCast, BipedChannel
+- Improved BipedRoar secondary motion quality
+- Sorted animation type dropdown alphabetically within each rig group
+
+Rigging
+- Corrected biped Head and Chest bone positions to better fit diverse mesh proportions
+
+UI
+- Added .jpeg support for texture import
+- Fixed rendered model not updating after texture changes
+- Fixed texture image preview not clearing when texture is removed
+- Added 3D axis rotation menu items for profile-specific node selections in the
+  skeleton canvas
+- Fixed animation name input box stealing focus on new animation creation
+- Audited animation parameter table: removed unused stompVolume from BipedRoar,
+  added missing crouchDepthFactor to BipedStab
+
+1.0.1 (May 8, 2026):
+
+Rigging
+- Fixed bone assignment progress status
+
+UI
+- Added spacebar shortcut to open component property popup from canvas
+- Fixed mouse scrolling on win11
+
+1.0.0 (May 4, 2026):
+
+Animation
+- Added procedural animation for all rig types: biped (walk, run, jump, idle, roar, hurt, die), quadruped (walk, run, attack, eat, idle, roar, hurt, die), bird (walk, run, fly, glide, attack, eat, idle, die), fish (swim, idle, die), snake (slither, idle, die), insect (walk, fly, idle, rub hands, attack, die), and spider (walk, run, idle, die)
+- Added procedural sound effect generation for animations (footsteps, whoosh events)
+- Added data-driven animation parameter UI with per-animation tweakable controls
+- Replaced iterative IK solvers with analytic two-bone IK and soft IK
+- Added physics-based ragdoll die animations for multiple rig types
+- Added scrolling ground plane in animation preview for locomotion animations
+- Added play/pause control and frame scrubber to animation preview
+- Added bone weight heat map visualisation in animation preview
+- Added bone highlight in animation preview when selected in bone manager
+
+Rigging
+- Fully implemented rig generator with skeleton hierarchy, inverse bind matrices, and vertex skin weights
+- Added support for seven rig templates: biped, quadruped, bird, fish, snake, insect, spider
+- Added edge-to-bone assignment workflow with "Select Bone Edges" helper
+- Fixed Hips bone direction, Jaw bone correction, and mirrored vertex binding
+- Added edge interpolation for long joints to improve skin deformation
+
+Export
+- Added full rig and animation export for both GLB and FBX
+- Fixed FBX animation rotation (90-degree flip, gimbal-lock Euler unwrapping, 1-frame glitch)
+- Fixed FBX texture export and bone naming
+- Added export progress UI
+
+UV & Textures
+- Fixed seam gradient UV charts and UV chart blending at part boundaries
+- Increased texture bleed from 2px to 5px to eliminate seam lines
+- Fixed thin white line artefacts at seam boundaries
+
+Mesh
+- Improved mesh algorithm determinism and stability
+- Fixed splitPartByNode null pointer dereference
+- Fixed sourceId propagation during spline interpolation and tube mesh building
+
+UI
+- Added welcome widget with recent files, preview model display, and clear-history option
+- Added turnaround image editor (replaces the old direct-open action)
+- Added drag-and-drop support for .ds3 files and image files onto the canvas
+- Added component drag-and-drop reordering with visual drop hints
+- Fixed HiDPI/Retina component preview scaling
+- Added part role selector and type badges on preview tiles
+- Improved bone-to-edge assignment workflow and tree view styling in bone manager
+- Unified control heights and updated theme (tab style, checkbox rounded border, colour names)
+- Improved QComboBox sizing so full option text is always visible
+- Increased recent files history limit to 15
+
+Rendering
+- Replaced shaders with clean clay-like architectural shaders; removed environment maps and IBL lighting
+- Improved wireframe thickness
+- Improved preview scene widget with example scene models
+
+Build & CI
+- Updated to Qt 6 compatibility fixes
+- Updated CI runners to ubuntu-22.04 and windows-2022
+- Added Ubuntu AppImage screenshot capture and artifact upload in release workflow
+- Added dust3d-export and dust3d-generate-from-image Copilot skills
+
+1.0.0-rc.9 (Jul 27, 2023):
+
+- Fix windows build
+
+1.0.0-rc.8 (Jul 18, 2023):
+
+- Fix color and texture of mirrored parts
+- Fix color of seam triangles
+
+1.0.0-rc.7 (Feb 21, 2023):
+
+- Add support to select two images and auto combine as background image
+- Simplify shaders
+- Rebuild parts UI
+- Remove example models
+- Add Stitching Line meshing method
+- Replace UV algorithm with built-in algorithm
+- Replace CGAL mesh library with built-in boolean algorithm
+- Remove Rig and Motion
+
+1.0.0-rc.6 (Apr 12, 2020):
+
+- Fix crash after remesh  
+- Fix remesh memory leak  
+- Change default part base as PartBase::Average  
+- Add menu to Parts Tree: Refresh  
+- Remove short menu from Parts Tree  
+- Fix part widget display at wrong place  
+- Fix deformMap of imported document not saved  
+- Fix UV not generated if only uncombined or errored components exist  
+- Optimize nodes deletion  
+- Remove Mark Pen  
+
+1.0.0-rc.5 (Apr 9, 2020):
+
+- Add preference: Toon Shader  
+- Add menu: Export as Image  
+- Add auto saving  
+- Change to single instance with multiple windows  
+- Refactor stroke mesh builder  
+- Add menu: Import  
+- Show edge direction on canvas  
+- Add example model: Backpacker  
+
+1.0.0-rc.3 (Mar 20, 2020):
+
+- Fix negative skinning weight  
+- Fix IBL shader  
+- Add win32 release  
+
+1.0.0-rc.1 (Mar 1, 2020):
+
+- Add shortcuts for menu items  
+- Preserve window size between runs  
+- Drop win32 support  
+- Add win64 support  
+- Add remesh by integrating Instant-Meshes  
+- Add cloth simulation by integrating FastMassSpring  
+- New rig generator  
+- Add Spanish and Italian language  
+- Fix glb exporting alpha mode setting  
+- Add texture size preference setting  
+- Add example model: Cat  
+
+1.0.0-beta.29 (Dec 25, 2019):
+
+- Add marker pen: A new way of modeling from contour  
+- Fix crash when nodes are extremely small  
+- Fix shader for core profile  
+
+1.0.0-beta.28 (Dec 15, 2019):
+
+- Add new generated mesh type: Grid mesh  
+- Include non-manifold geometry in result  
+- Fix smooth angle  
+- Fix preview model zoom scale  
+
+1.0.0-beta.27 (Nov 8, 2019):
+
+- Fix normal map generation  
+- Fix transparency and solubility setting for texture generation  
+- Fix shader for metallic parameter  
+- Remove remote IO protocol  
+- Add linear interpolation to motion timeline editor  
+- Add countershading setting for texture generation  
+- Update built-in example models  
+
+1.0.0-beta.26 (Nov 3, 2019):
+
+- Fix undo for part tree widget  
+- Add experiment auto colorizing (Thanks @enzyme69)  
+- Improve mesh generation, more average edge length    
+- Fix icon naming issue for icon themes (Thanks @creepertron95)  
+- Add tile scale setting for texture generator  
+- Add color transparency support  
+- Remove built-in example model: Bob  
+- Add built-in example model: Giraffe  
+
+1.0.0-beta.25 (Oct 20, 2019):
+
+- Add shortcuts key F: bring part widget of hovered part to visible area
+- Add shortcut key C: toggle chamfer state  
+- Add shortcut key O: toggle flat shading  
+- Add shortcut key R: toggle viewport rotation  
+- Change behaviour of shortcut key H: toggle all nodes when there is no selection  
+- Add mini buttons to quick set cut face rotation  
+- Add one tool button to toggle viewport rotation  
+- Increase the icon size of mini buttons  
+
+1.0.0-beta.24 (Oct 6, 2019):
+
+- Support part color copy and paste  
+- Add auto ragdoll animation, powered by bullet3  
+- Fix texture generation  
+- Fix optimized compiling options for windows  
+
+1.0.0-beta.23 (Aug 19, 2019):
+
+- Fix rig bone name issue because of translation  
+- Update application logo  
+- Add deforming map  
+- Improve UV quality  
+- Speed up mesh generation by adding more caches  
+- Add deforming brush  
+- Remove drag mode icon  
+- Add hollow modifier  
+
+1.0.0-beta.22 (Jul 28, 2019):
+
+- Improve intermediate nodes generation  
+- Add JavaScript language support for procedural nodes generation  
+- Optimize cut face endpoints sort algorithm  
+- Local average base normal to keep mesh flow  
+- Support Open and Export from command line  
+- Add check for updates to menu  
+- Fix inconsistent base normal when shape is too straight  
+- Add procedural tree example model  
+
+1.0.0-beta.21 (Jul 11, 2019):
+
+- Fix build for Raspberry Pi 3 Model B+  
+- Fix cut face direction for intermediate nodes  
+- Fix mesh render result flashback  
+- Sort cut face list by x position  
+- Support customizing cut face per each node   
+
+1.0.0-beta.20 (Jul 7, 2019):
+
+- Support language: Simplified Chinese  
+- Fix crash on cut face nodes ordering  
+- Improve quality of mesh generation  
+
+1.0.0-beta.19 (Jun 26, 2019):
+
+- Improve Pose Editor UI
+- Add new pose setting: yTranslationScale
+- Add new base option: Average
+- Fix part mesh generation variation
+- Sort material, pose, and motion list by name
+- Disable three nodes branch by default, could be enabled from preferences window
+- Make flat shading as default
+
+1.0.0-beta.18 (Jun 13, 2019):
+
+- Add preferences settings, including flat shading, default color, and default combine mode
+- Fix user defined cut face flipped normal issues
+- Improve shader light
+- Fix motion editor issues
+- Improve nodes scaling experience
+- Fix rig generation
+- Add more built-in example models
+- Change application logo
+
+1.0.0-beta.17 (May 26, 2019):
+
+- Remote IO Protocol
+- Uncombined Mode
+- User Defined Cut Face
+- Base Plane Constrain
+- Color Solubility
+- Crash Fix
+
+1.0.0-beta.16 (Mar 10, 2019):
+
+- Support onion skinning in pose editor  
+- Upgrade CGAL version from 4.11.1 to 4.13  
+- Replace triangulation with CGAL triangulate faces method   
+- Update CGAL kernel using from exact to inexact  
+- Fix invalid base normal on linux  
+- Remove cut face customization  
+- Make chamfer tool as a separate mini button  
+
+1.0.0-beta.15 (Feb 28, 2019):
+
+- Improved mesh quality: more quads with even edge size  
+- Remesh seams as better as possible and keep mesh manifold  
+- Support cut face customization  
+- Add chamfer tool  
+- Add back wireframe view  
+- Removed convex wrapping tool  
+- Removed global rotation buttons  
+- Removed rust language dependency: reimplemented mesh generator in C++  
+
+1.0.0-beta.3 (Dec 1, 2018):
+
+- Combinable Bmesh Modeling  
+- Auto UV Unwrapping  
+- Metallic/Roughness PBR Material Support  
+- Auto Rigging  
+- Pose Editing  
+- Motion Editing  
+- OBJ Export Support  
+- FBX Export Support  
+- glTF 2.0 Export Support  

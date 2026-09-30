@@ -5,12 +5,20 @@
 #include <QPalette>
 #include <QStyleFactory>
 
-QColor Theme::white = QColor(0xf7, 0xd9, 0xc8);
+QColor Theme::white = Qt::white; //QColor(0xf7, 0xd9, 0xc8);
 QColor Theme::red = QColor(0xfc, 0x66, 0x21);
 QColor Theme::green = QColor(0xaa, 0xeb, 0xc4);
 QColor Theme::blue = QColor(0x0d, 0xa9, 0xf1);
 QColor Theme::black = QColor(25, 25, 25);
 QColor Theme::gray = QColor(0x32, 0x32, 0x32);
+QColor Theme::darkBackground = QColor(0x25, 0x25, 0x25);
+QColor Theme::altDarkBackground = QColor(53, 53, 53);
+QColor Theme::separator = QColor(0x4a, 0x4a, 0x4a);
+QColor Theme::link = QColor(42, 130, 218);
+QColor Theme::disabledIcon = QColor(0xcc, 0xcc, 0xcc);
+QColor Theme::buttonDimmed = QColor(0x52, 0x52, 0x52);
+QColor Theme::buttonDisabled = QColor(42, 42, 42);
+QColor Theme::midGray = QColor(128, 128, 128);
 float Theme::normalAlpha = 96.0 / 255;
 float Theme::checkedAlpha = 1.0;
 float Theme::edgeAlpha = 1.0;
@@ -30,35 +38,59 @@ void Theme::initialize()
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
     QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(0x25, 0x25, 0x25));
-    darkPalette.setColor(QPalette::WindowText, QColor(0xf7, 0xd9, 0xc8));
-    darkPalette.setColor(QPalette::Base, QColor(25, 25, 25));
-    darkPalette.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
-    darkPalette.setColor(QPalette::Text, QColor(0xf7, 0xd9, 0xc8));
-    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(0x25, 0x25, 0x25));
-    darkPalette.setColor(QPalette::Button, QColor(53, 53, 53));
-    darkPalette.setColor(QPalette::ButtonText, QColor(0xf7, 0xd9, 0xc8));
-    darkPalette.setColor(QPalette::BrightText, QColor(0xfc, 0x66, 0x21));
-    darkPalette.setColor(QPalette::Link, QColor(42, 130, 218));
-    darkPalette.setColor(QPalette::Highlight, QColor(0xfc, 0x66, 0x21));
-    darkPalette.setColor(QPalette::HighlightedText, QColor(0x25, 0x25, 0x25));
+    darkPalette.setColor(QPalette::Window, Theme::darkBackground);
+    darkPalette.setColor(QPalette::WindowText, Theme::white);
+    darkPalette.setColor(QPalette::Base, Theme::black);
+    darkPalette.setColor(QPalette::AlternateBase, Theme::altDarkBackground);
+    darkPalette.setColor(QPalette::Text, Theme::white);
+    darkPalette.setColor(QPalette::Disabled, QPalette::Text, Theme::darkBackground);
+    darkPalette.setColor(QPalette::Button, Theme::altDarkBackground);
+    darkPalette.setColor(QPalette::ButtonText, Theme::white);
+    darkPalette.setColor(QPalette::BrightText, Theme::red);
+    darkPalette.setColor(QPalette::Link, Theme::link);
+    darkPalette.setColor(QPalette::Highlight, Theme::red);
+    darkPalette.setColor(QPalette::HighlightedText, Theme::darkBackground);
     QApplication::setPalette(darkPalette);
 
     QFont font;
     font.setWeight(QFont::Light);
     font.setBold(false);
+    font.setPixelSize(12);
     QApplication::setFont(font);
 
     QFontMetrics fontMetrics(QApplication::font());
     Theme::toolIconFontSize = fontMetrics.height();
     Theme::toolIconSize = (int)(Theme::toolIconFontSize * 1.5);
     Theme::miniIconFontSize = (int)(Theme::toolIconFontSize * 0.85);
-    Theme::miniIconSize = (int)(Theme::miniIconFontSize * 1.67);
-    Theme::partPreviewImageSize = (Theme::miniIconSize * 2.3);
+    Theme::miniIconSize = (int)(Theme::miniIconFontSize * 1.5);
+    Theme::partPreviewImageSize = (Theme::miniIconSize * 3.7);
     Theme::sidebarPreferredWidth = Theme::partPreviewImageSize * 4.5;
     Theme::previewIconBorderSize = std::max(1, Theme::partPreviewImageSize / 20);
     Theme::previewIconMargin = std::max(1, Theme::previewIconBorderSize / 2);
     Theme::previewIconBorderRadius = std::max(3, Theme::partPreviewImageSize / 10);
+
+    int checkboxSize = Theme::toolIconFontSize;
+    int checkboxRadius = std::max(3, Theme::toolIconFontSize / 4);
+
+    QString globalStyle = QString(
+        "QPushButton:disabled { color: %1; }"
+        "QComboBox { qproperty-sizeAdjustPolicy: AdjustToContents; }"
+        "QComboBox QAbstractItemView { min-width: 12em; }"
+        "QCheckBox { spacing: 4px; }"
+        "QCheckBox::indicator { width: %4px; height: %4px; border: 1px solid %3; border-radius: %5px; background-color: %2; }"
+        "QCheckBox::indicator:checked { border: 1px solid %6; background-color: %2; image: url(:/resources/checkmark.svg); }"
+        "QProgressBar { max-height: 4px; }"
+        "QFrame#separatorLine { background-color: %7; min-height: 1px; max-height: 1px; border: none; }"
+        "QTabBar::tab { padding: 6px 4px; border: none; background: %2; }"
+        "QTabBar::tab:selected { border-left: 2px solid %6; }")
+                              .arg(Theme::darkBackground.name())
+                              .arg(Theme::altDarkBackground.name())
+                              .arg(Theme::buttonDimmed.name())
+                              .arg(checkboxSize)
+                              .arg(checkboxRadius)
+                              .arg(Theme::red.name())
+                              .arg(Theme::separator.name());
+    qApp->setStyleSheet(globalStyle);
 
     Theme::awesome();
 }
@@ -70,7 +102,7 @@ QtAwesome* Theme::awesome()
         s_awesome = new QtAwesome();
         s_awesome->initFontAwesome();
         s_awesome->setDefaultOption("color", Theme::white);
-        s_awesome->setDefaultOption("color-disabled", QColor(0xcc, 0xcc, 0xcc));
+        s_awesome->setDefaultOption("color-disabled", Theme::disabledIcon);
         s_awesome->setDefaultOption("color-active", Theme::white);
         s_awesome->setDefaultOption("color-selected", Theme::white);
     }
@@ -81,7 +113,6 @@ void Theme::initAwesomeButton(QPushButton* button)
 {
     button->setFont(Theme::awesome()->font(Theme::toolIconFontSize));
     button->setFixedSize(Theme::toolIconSize, Theme::toolIconSize);
-    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
     button->setFocusPolicy(Qt::NoFocus);
 }
 
@@ -112,7 +143,7 @@ void Theme::updateAwesomeMiniButton(QPushButton* button, QChar icon, bool highli
             color = Theme::white;
         }
     } else {
-        color = QColor("#525252");
+        color = Theme::buttonDimmed;
     }
 
     if (needDesaturation) {
@@ -122,7 +153,7 @@ void Theme::updateAwesomeMiniButton(QPushButton* button, QChar icon, bool highli
     }
 
     if (!enabled) {
-        color = QColor(42, 42, 42);
+        color = Theme::buttonDisabled;
     }
 
     button->setStyleSheet("QPushButton {border: none; background: none; color: " + color.name() + ";}");
@@ -130,14 +161,13 @@ void Theme::updateAwesomeMiniButton(QPushButton* button, QChar icon, bool highli
 
 void Theme::initAwesomeToolButtonWithoutFont(QPushButton* button)
 {
-    button->setFixedSize(Theme::toolIconSize * 0.75, Theme::toolIconSize * 0.75);
-    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
+    button->setFixedSize(Theme::miniIconSize, Theme::miniIconSize);
     button->setFocusPolicy(Qt::NoFocus);
 }
 
 void Theme::initAwesomeToolButton(QPushButton* button)
 {
-    button->setFont(Theme::awesome()->font(Theme::toolIconFontSize * 0.75));
+    button->setFont(Theme::awesome()->font(Theme::miniIconFontSize));
     Theme::initAwesomeToolButtonWithoutFont(button);
 }
 
@@ -147,15 +177,16 @@ void Theme::initToolButton(QPushButton* button)
     font.setWeight(QFont::Light);
     font.setBold(false);
     button->setFont(font);
-    button->setFixedHeight(Theme::toolIconSize * 0.75);
-    button->setStyleSheet("QPushButton {color: " + Theme::white.name() + "}");
+    button->setFixedHeight(Theme::toolIconSize);
     button->setFocusPolicy(Qt::NoFocus);
 }
 
 void Theme::initCheckbox(QCheckBox* checkbox)
 {
     QPalette palette = checkbox->palette();
+#if QT_VERSION < 0x060000
     palette.setColor(QPalette::Background, Theme::white);
+#endif
     checkbox->setPalette(palette);
 }
 
@@ -166,5 +197,5 @@ void Theme::initIconButton(QPushButton* button)
 
 void Theme::initLineEdit(QLineEdit* edit)
 {
-    edit->setStyleSheet("QLineEdit { background-color: black }");
+    edit->setStyleSheet("QLineEdit { background-color: " + Theme::black.name() + " }");
 }

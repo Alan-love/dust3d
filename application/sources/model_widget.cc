@@ -1,5 +1,4 @@
 #include "model_widget.h"
-#include "dds_file.h"
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QMouseEvent>
@@ -174,6 +173,14 @@ bool ModelWidget::isWireframeVisible()
     return m_isWireframeVisible;
 }
 
+void ModelWidget::setWireframeVisible(bool visible)
+{
+    if (m_isWireframeVisible != visible) {
+        m_isWireframeVisible = visible;
+        update();
+    }
+}
+
 void ModelWidget::toggleRotation()
 {
     if (nullptr != m_rotationTimer) {
@@ -199,7 +206,7 @@ bool ModelWidget::inputMousePressEventFromOtherWidget(QMouseEvent* event, bool n
         }
         if (!shouldStartMove && !m_mousePickTargetPositionInModelSpace.isNull())
             emit mousePressed();
-    } else if (event->button() == Qt::MidButton) {
+    } else if (event->button() == Qt::MiddleButton) {
         shouldStartMove = m_moveEnabled;
     }
     if (shouldStartMove) {
@@ -250,7 +257,7 @@ bool ModelWidget::inputMouseMoveEventFromOtherWidget(QMouseEvent* event)
     int dx = pos.x() - m_lastPos.x();
     int dy = pos.y() - m_lastPos.y();
 
-    if ((event->buttons() & Qt::MidButton) || (m_moveStarted && (event->buttons() & Qt::LeftButton))) {
+    if ((event->buttons() & Qt::MiddleButton) || (m_moveStarted && (event->buttons() & Qt::LeftButton))) {
         if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ShiftModifier)) {
             if (m_moveStarted) {
                 if (m_moveAndZoomByWindow) {
@@ -297,7 +304,7 @@ bool ModelWidget::inputWheelEventFromOtherWidget(QWheelEvent* event)
 
     if (m_mousePickingEnabled) {
         if (QGuiApplication::queryKeyboardModifiers().testFlag(Qt::ShiftModifier)) {
-            emit addMouseRadius((float)event->delta() / 200 / height());
+            emit addMouseRadius((float)event->angleDelta().y() / 120 / 200 / height());
             return true;
         }
     }
@@ -306,7 +313,7 @@ bool ModelWidget::inputWheelEventFromOtherWidget(QWheelEvent* event)
         return false;
 
     qreal delta = geometry().height() * 0.1f;
-    if (event->delta() < 0)
+    if (event->angleDelta().y() < 0)
         delta = -delta;
     zoom(delta);
 
@@ -466,6 +473,7 @@ void ModelWidget::paintGL()
 {
     QOpenGLFunctions* f = QOpenGLContext::currentContext()->functions();
 
+    f->glClearColor(0.0, 0.0, 0.0, 0.0);
     f->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     f->glEnable(GL_BLEND);
     f->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -481,7 +489,7 @@ void ModelWidget::paintGL()
     // that means the wireframe will not looking good,
     // hence, we use the polygon offset to mimic thickness of wireframes
     f->glEnable(GL_POLYGON_OFFSET_FILL);
-    f->glPolygonOffset(1.0, 1.0);
+    f->glPolygonOffset(1.0f, 1.0f);
 
     f->glViewport(0, 0, m_widthInPixels, m_heightInPixels);
 
@@ -518,6 +526,10 @@ void ModelWidget::drawWireframe()
     m_monochromeOpenGLProgram->setUniformValue(m_monochromeOpenGLProgram->getUniformLocationByName("projectionMatrix"), m_projection);
     m_monochromeOpenGLProgram->setUniformValue(m_monochromeOpenGLProgram->getUniformLocationByName("modelMatrix"), m_world);
     m_monochromeOpenGLProgram->setUniformValue(m_monochromeOpenGLProgram->getUniformLocationByName("viewMatrix"), m_camera);
+
+    if (m_monochromeOpenGLProgram->isCoreProfile()) {
+        m_monochromeOpenGLProgram->setUniformValue("viewportSize", QVector2D(m_widthInPixels, m_heightInPixels));
+    }
 
     if (m_wireframeOpenGLObject)
         m_wireframeOpenGLObject->draw();

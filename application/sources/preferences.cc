@@ -1,6 +1,6 @@
 #include "preferences.h"
 
-#define MAX_RECENT_FILES 7
+#define MAX_RECENT_FILES 15
 
 Preferences& Preferences::instance()
 {
@@ -50,6 +50,11 @@ void Preferences::setCurrentFile(const QString& fileName)
         files.removeLast();
 
     m_settings.setValue("recentFileList", files);
+}
+
+void Preferences::clearRecentFileList()
+{
+    m_settings.remove("recentFileList");
 }
 
 void Preferences::reset()

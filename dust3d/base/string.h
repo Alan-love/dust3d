@@ -25,8 +25,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <clocale>
+#include <cstdlib>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -82,9 +86,89 @@ namespace String {
         return escapedString;
     }
 
+    // Escape a value for use inside a double-quoted XML attribute.
+    inline std::string escapedForXmlAttribute(const std::string& string)
+    {
+        std::string escapedString;
+        escapedString.reserve(string.size() + 8);
+        for (char c : string) {
+            switch (c) {
+            case '&':
+                escapedString += "&amp;";
+                break;
+            case '<':
+                escapedString += "&lt;";
+                break;
+            case '>':
+                escapedString += "&gt;";
+                break;
+            case '"':
+                escapedString += "&quot;";
+                break;
+            default:
+                escapedString += c;
+            }
+        }
+        return escapedString;
+    }
+
+    // The decimal separator of the current C locale. Qt applies the system locale
+    // on startup, so this may be "," (or something else) instead of ".".
+    inline std::string localeDecimalPoint()
+    {
+        const struct lconv* conv = std::localeconv();
+        if (nullptr == conv || nullptr == conv->decimal_point || '\0' == conv->decimal_point[0])
+            return ".";
+        return conv->decimal_point;
+    }
+
+    // Behaves like std::stod, but does not depend on the C locale: both "." and ","
+    // are accepted as the decimal separator, so model files written with either
+    // (including ones saved by older versions under comma-decimal locales) load
+    // the same everywhere.
+    inline double toDouble(const std::string& string)
+    {
+        const std::string decimalPoint = localeDecimalPoint();
+        std::string normalized;
+        normalized.reserve(string.size() + decimalPoint.size());
+        for (char c : string) {
+            if ('.' == c || ',' == c)
+                normalized += decimalPoint;
+            else
+                normalized += c;
+        }
+        const char* begin = normalized.c_str();
+        char* end = nullptr;
+        const int savedErrno = errno;
+        errno = 0;
+        const double value = std::strtod(begin, &end);
+        if (end == begin) {
+            errno = savedErrno;
+            throw std::invalid_argument("stod");
+        }
+        if (ERANGE == errno)
+            throw std::out_of_range("stod");
+        errno = savedErrno;
+        return value;
+    }
+
     inline float toFloat(const std::string& string)
     {
-        return (float)std::stod(string);
+        return (float)toDouble(string);
+    }
+
+    // Produces exactly what std::to_string(double) produces ("%f"), but always
+    // with "." as the decimal separator regardless of the C locale.
+    inline std::string fromDouble(double value)
+    {
+        std::string string = std::to_string(value);
+        const std::string decimalPoint = localeDecimalPoint();
+        if ("." != decimalPoint) {
+            auto position = string.find(decimalPoint);
+            if (std::string::npos != position)
+                string.replace(position, decimalPoint.size(), ".");
+        }
+        return string;
     }
 
     inline int toInt(const std::string& string)

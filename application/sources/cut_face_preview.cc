@@ -1,5 +1,6 @@
 #include "cut_face_preview.h"
 #include "theme.h"
+#include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -7,7 +8,10 @@ static std::map<int, QImage*> g_standardCutFaceMap;
 
 QImage* buildCutFaceTemplatePreviewImage(const std::vector<dust3d::Vector2>& cutTemplate)
 {
-    QImage* image = new QImage(Theme::partPreviewImageSize, Theme::partPreviewImageSize, QImage::Format_ARGB32);
+    qreal dpr = qApp->devicePixelRatio();
+    int physicalSize = qRound(Theme::partPreviewImageSize * dpr);
+    QImage* image = new QImage(physicalSize, physicalSize, QImage::Format_ARGB32);
+    image->setDevicePixelRatio(dpr);
     image->fill(Qt::transparent);
 
     if (cutTemplate.empty())
@@ -16,13 +20,17 @@ QImage* buildCutFaceTemplatePreviewImage(const std::vector<dust3d::Vector2>& cut
     QPainter painter;
     painter.begin(image);
     painter.setRenderHint(QPainter::Antialiasing);
+#if QT_VERSION < 0x060000
     painter.setRenderHint(QPainter::HighQualityAntialiasing);
+#endif
 
-    QPen pen(Theme::red, 2);
+    QPen pen(Theme::red, 1.0 * dpr);
     painter.setPen(pen);
 
+    QColor fillColor = Theme::white;
+    fillColor.setAlpha(40);
     QBrush brush;
-    brush.setColor(Theme::white);
+    brush.setColor(fillColor);
     brush.setStyle(Qt::SolidPattern);
 
     painter.setBrush(brush);
@@ -32,13 +40,25 @@ QImage* buildCutFaceTemplatePreviewImage(const std::vector<dust3d::Vector2>& cut
     for (size_t i = 0; i <= cutTemplate.size(); ++i) {
         const auto& it = cutTemplate[i % cutTemplate.size()];
         polygon.append(QPoint((it.x() * scale + 1.0) * 0.5 * Theme::partPreviewImageSize,
-            (it.y() * scale + 1.0) * 0.5 * Theme::partPreviewImageSize));
+            (-it.y() * scale + 1.0) * 0.5 * Theme::partPreviewImageSize));
     }
 
     QPainterPath path;
     path.addPolygon(polygon);
     painter.fillPath(path, brush);
     painter.drawPath(path);
+
+    painter.setPen(Qt::NoPen);
+    QColor dotColor = Theme::white;
+    dotColor.setAlpha(160);
+    painter.setBrush(QBrush(dotColor));
+    double dotRadius = 0.5 * dpr;
+    for (size_t i = 0; i < cutTemplate.size(); ++i) {
+        const auto& it = cutTemplate[i];
+        double cx = (it.x() * scale + 1.0) * 0.5 * Theme::partPreviewImageSize;
+        double cy = (-it.y() * scale + 1.0) * 0.5 * Theme::partPreviewImageSize;
+        painter.drawEllipse(QPointF(cx, cy), dotRadius, dotRadius);
+    }
 
     painter.end();
 

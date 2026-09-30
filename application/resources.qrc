@@ -8,14 +8,40 @@
         <file>shaders/model.frag</file>
         <file>shaders/model_core.vert</file>
         <file>shaders/model_core.frag</file>
+        <file>shaders/model_wasm.vert</file>
+        <file>shaders/model_wasm.frag</file>
         <file>shaders/monochrome.vert</file>
         <file>shaders/monochrome.frag</file>
         <file>shaders/monochrome_core.vert</file>
+        <file>shaders/monochrome_core.geom</file>
         <file>shaders/monochrome_core.frag</file>
-        <file>resources/cedar_bridge_irradiance.dds</file>
-        <file>resources/cedar_bridge_specular.dds</file>
+        <file>shaders/monochrome_wasm.vert</file>
+        <file>shaders/monochrome_wasm.frag</file>
+        <file>shaders/shadow_map.vert</file>
+        <file>shaders/shadow_map.frag</file>
+        <file>shaders/shadow_map_core.vert</file>
+        <file>shaders/shadow_map_core.frag</file>
+        <file>shaders/world_model.vert</file>
+        <file>shaders/world_model.frag</file>
+        <file>shaders/world_model_core.vert</file>
+        <file>shaders/world_model_core.frag</file>
+        <file>shaders/world_ground.vert</file>
+        <file>shaders/world_ground.frag</file>
+        <file>shaders/world_ground_core.vert</file>
+        <file>shaders/world_ground_core.frag</file>
+        <file>shaders/scene_model.frag</file>
+        <file>shaders/scene_model_core.frag</file>
+        <file>shaders/scene_outline.vert</file>
+        <file>shaders/scene_outline.frag</file>
+        <file>shaders/scene_outline_core.vert</file>
+        <file>shaders/scene_outline_core.frag</file>
+        <file>shaders/scene_ground.frag</file>
+        <file>shaders/scene_ground_core.frag</file>
         <file>resources/dust3d-vertical.png</file>
         <file>resources/toolbar_add.svg</file>
+        <file>resources/toolbar_add_red.svg</file>
+        <file>resources/toolbar_add_green.svg</file>
+        <file>resources/checkmark.svg</file>
         <file>resources/toolbar_pointer.svg</file>
         <file>resources/toolbar_x.svg</file>
         <file>resources/toolbar_x_disabled.svg</file>
@@ -25,13 +51,16 @@
         <file>resources/toolbar_z_disabled.svg</file>
         <file>resources/toolbar_radius.svg</file>
         <file>resources/toolbar_radius_disabled.svg</file>
-        <file>resources/model-addax.ds3</file>
-        <file>resources/model-banana.ds3</file>
-        <file>resources/model-bicycle.ds3</file>
-        <file>resources/model-dog.ds3</file>
-        <file>resources/model-meerkat.ds3</file>
-        <file>resources/model-mosquito.ds3</file>
-        <file>resources/model-screwdriver.ds3</file>
-        <file>resources/model-seagull.ds3</file>
+        <file>resources/rig_biped.xml</file>
+        <file>resources/rig_quadruped.xml</file>
+        <file>resources/rig_bird.xml</file>
+        <file>resources/rig_fish.xml</file>
+        <file>resources/rig_insect.xml</file>
+        <file>resources/rig_snake.xml</file>
+        <file>resources/rig_spider.xml</file>
+        <file>resources/preview_model_first.xml</file>
+        <file>resources/preview_model_second.xml</file>
+        <file>resources/preview_model_third.xml</file>
+        <file>resources/preview_model_fourth.xml</file>
     </qresource>
 </RCC>

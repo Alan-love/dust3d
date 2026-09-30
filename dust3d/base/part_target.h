@@ -31,6 +31,8 @@ enum class PartTarget {
     Model = 0,
     CutFace,
     StitchingLine,
+    StitchingLoop,
+    ImportedModel,
     Count
 };
 

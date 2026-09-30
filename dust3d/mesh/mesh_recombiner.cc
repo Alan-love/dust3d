@@ -20,10 +20,13 @@
  *  SOFTWARE.
  */
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <dust3d/base/position_key.h>
 #include <dust3d/mesh/hole_wrapper.h>
 #include <dust3d/mesh/mesh_recombiner.h>
+#include <limits>
 #include <queue>
 #include <set>
 
@@ -79,6 +82,29 @@ bool MeshRecombiner::convertHalfEdgesToEdgeLoops(const std::vector<std::pair<siz
         for (const auto& vertex : edgeLoop) {
             vertexLinkMap.erase(vertex);
         }
+        bool collapsed = true;
+        while (collapsed) {
+            collapsed = false;
+            std::map<PositionKey, size_t> positionToIndex;
+            for (size_t i = 0; i < edgeLoop.size(); ++i) {
+                PositionKey key((*m_vertices)[edgeLoop[i]]);
+                auto it = positionToIndex.find(key);
+                if (it != positionToIndex.end()) {
+                    size_t firstIndex = it->second;
+                    std::vector<size_t> newLoop;
+                    for (size_t j = 0; j <= firstIndex; ++j)
+                        newLoop.push_back(edgeLoop[j]);
+                    for (size_t j = i + 1; j < edgeLoop.size(); ++j)
+                        newLoop.push_back(edgeLoop[j]);
+                    edgeLoop = newLoop;
+                    collapsed = true;
+                    break;
+                }
+                positionToIndex.insert({ key, i });
+            }
+        }
+        if (edgeLoop.size() < 3)
+            continue;
         edgeLoops->push_back(edgeLoop);
     }
     return true;
@@ -213,18 +239,96 @@ bool MeshRecombiner::recombine()
         }
     }
 
+    std::map<size_t, std::pair<size_t, size_t>> bridgeFaceRanges;
     for (auto& it : islandsMap) {
         if (1 == it.second.edgeLoops[0].size() && it.second.edgeLoops[0].size() == it.second.edgeLoops[1].size()) {
+            size_t facesBefore = m_regeneratedFaces.size();
             if (bridge(it.second.edgeLoops[0][0], it.second.edgeLoops[1][0])) {
                 m_goodSeams.insert(it.first);
+                bridgeFaceRanges[it.first] = { facesBefore, m_regeneratedFaces.size() };
             }
         }
+    }
+
+    for (const auto& it : islandsMap) {
+        SeamReport report;
+        report.firstLoops = it.second.edgeLoops[0].size();
+        report.secondLoops = it.second.edgeLoops[1].size();
+        if (!it.second.edgeLoops[0].empty())
+            report.firstLoopVertices = it.second.edgeLoops[0][0].size();
+        if (!it.second.edgeLoops[1].empty())
+            report.secondLoopVertices = it.second.edgeLoops[1][0].size();
+        report.bridged = m_goodSeams.find(it.first) != m_goodSeams.end();
+        auto loopEdgeLength = [&](const std::vector<std::vector<size_t>>& loops) {
+            double total = 0.0;
+            size_t edges = 0;
+            for (const auto& loop : loops) {
+                for (size_t i = 0; i < loop.size(); ++i) {
+                    total += ((*m_vertices)[loop[i]] - (*m_vertices)[loop[(i + 1) % loop.size()]]).length();
+                    ++edges;
+                }
+            }
+            return edges > 0 ? total / edges : 0.0;
+        };
+        report.firstLoopEdgeLength = loopEdgeLength(it.second.edgeLoops[0]);
+        report.secondLoopEdgeLength = loopEdgeLength(it.second.edgeLoops[1]);
+        auto findRange = bridgeFaceRanges.find(it.first);
+        if (findRange != bridgeFaceRanges.end() && report.bridged) {
+            std::set<size_t> firstLoopVertices(it.second.edgeLoops[0][0].begin(), it.second.edgeLoops[0][0].end());
+            std::map<size_t, size_t> fan;
+            report.bridgeMinAngle = 180.0;
+            for (size_t f = findRange->second.first; f < findRange->second.second; ++f) {
+                const auto& face = m_regeneratedFaces[f];
+                ++report.bridgeTriangles;
+                for (size_t i = 0; i < face.size(); ++i) {
+                    const Vector3& a = (*m_vertices)[face[(i + face.size() - 1) % face.size()]];
+                    const Vector3& b = (*m_vertices)[face[i]];
+                    const Vector3& c = (*m_vertices)[face[(i + 1) % face.size()]];
+                    double angle = Vector3::angleBetween(a - b, c - b) * 180.0 / Math::Pi;
+                    report.bridgeMinAngle = std::min(report.bridgeMinAngle, angle);
+                    ++fan[face[i]];
+                    bool crosses = (firstLoopVertices.count(face[i]) > 0) != (firstLoopVertices.count(face[(i + 1) % face.size()]) > 0);
+                    if (crosses)
+                        report.bridgeMaxWidth = std::max(report.bridgeMaxWidth, (c - b).length());
+                }
+            }
+            for (const auto& f : fan)
+                report.bridgeMaxFan = std::max(report.bridgeMaxFan, f.second);
+        }
+        size_t count = 0;
+        for (size_t side = 0; side < 2; ++side) {
+            for (const auto& edgeLoop : it.second.edgeLoops[side]) {
+                for (const auto& index : edgeLoop) {
+                    report.center += (*m_vertices)[index];
+                    ++count;
+                }
+            }
+        }
+        if (count > 0)
+            report.center /= (double)count;
+        for (size_t side = 0; side < 2; ++side) {
+            for (const auto& edgeLoop : it.second.edgeLoops[side]) {
+                for (const auto& index : edgeLoop)
+                    report.radius = std::max(report.radius, ((*m_vertices)[index] - report.center).length());
+            }
+        }
+        m_seamReports.push_back(report);
     }
 
     copyNonSeamFacesAsRegenerated();
     removeReluctantVertices();
 
     return true;
+}
+
+const std::vector<MeshRecombiner::SeamReport>& MeshRecombiner::seamReports() const
+{
+    return m_seamReports;
+}
+
+const std::map<size_t, size_t>& MeshRecombiner::inputFacesInSeamArea() const
+{
+    return m_facesInSeamArea;
 }
 
 size_t MeshRecombiner::adjustTrianglesFromSeam(std::vector<size_t>& edgeLoop, size_t seamIndex)
@@ -274,10 +378,15 @@ size_t MeshRecombiner::adjustTrianglesFromSeam(std::vector<size_t>& edgeLoop, si
 size_t MeshRecombiner::otherVertexOfTriangle(const std::vector<size_t>& face, const std::vector<size_t>& indices)
 {
     for (const auto& v : face) {
+        bool found = false;
         for (const auto& u : indices) {
-            if (u != v)
-                return u;
+            if (u == v) {
+                found = true;
+                break;
+            }
         }
+        if (!found)
+            return v;
     }
     return face[0];
 }
@@ -313,6 +422,7 @@ size_t MeshRecombiner::nearestIndex(const Vector3& position, const std::vector<s
     size_t choosenIndex = 0;
     for (size_t i = 0; i < edgeLoop.size(); ++i) {
         float dist2 = ((*m_vertices)[edgeLoop[i]] - position).lengthSquared();
+        // Use only strictly less than to ensure deterministic first-match behavior
         if (dist2 < minDist2) {
             minDist2 = dist2;
             choosenIndex = i;
@@ -327,24 +437,75 @@ bool MeshRecombiner::bridge(const std::vector<size_t>& first, const std::vector<
     const std::vector<size_t>* small = &second;
     if (large->size() < small->size())
         std::swap(large, small);
+
+    if (small->size() < 3)
+        return false; // Need at least triangular loops
+
     std::vector<std::pair<size_t, size_t>> matchedPairs;
     std::map<size_t, size_t> nearestIndicesFromLargeToSmall;
+    std::map<size_t, bool> largeVertexMatched; // Track which large vertices are matched
+
+    // First pass: find best matches from small to large
     for (size_t i = 0; i < small->size(); ++i) {
         const auto& positionOnSmall = (*m_vertices)[(*small)[i]];
         size_t nearestIndexOnLarge = nearestIndex(positionOnSmall, *large);
-        auto matchResult = nearestIndicesFromLargeToSmall.find(nearestIndexOnLarge);
-        size_t nearestIndexOnSmall;
-        if (matchResult == nearestIndicesFromLargeToSmall.end()) {
-            const auto& positionOnLarge = (*m_vertices)[(*large)[nearestIndexOnLarge]];
-            nearestIndexOnSmall = nearestIndex(positionOnLarge, *small);
-            nearestIndicesFromLargeToSmall.insert({ nearestIndexOnLarge, nearestIndexOnSmall });
-        } else {
-            nearestIndexOnSmall = matchResult->second;
-        }
+
+        // Always record the bidirectional check, overwriting if we find a better one
+        const auto& positionOnLarge = (*m_vertices)[(*large)[nearestIndexOnLarge]];
+        size_t nearestIndexOnSmall = nearestIndex(positionOnLarge, *small);
+
+        // Use this match if it's bidirectional or if it's the best we can find
         if (nearestIndexOnSmall == i) {
-            matchedPairs.push_back({ nearestIndexOnSmall, nearestIndexOnLarge });
+            // Perfect bidirectional match
+            matchedPairs.push_back({ i, nearestIndexOnLarge });
+            largeVertexMatched[nearestIndexOnLarge] = true;
+        } else {
+            // Store for fallback matching below
+            nearestIndicesFromLargeToSmall[nearestIndexOnLarge] = i;
         }
     }
+
+    // If we don't have enough bidirectional matches, use the best nearby matches
+    // to ensure we always have valid pairs for bridging
+    if (matchedPairs.size() < 3) {
+        matchedPairs.clear();
+        largeVertexMatched.clear();
+
+        // Simpler matching: just find nearest from small to large
+        std::map<size_t, size_t> smallToLargeNearest;
+        for (size_t i = 0; i < small->size(); ++i) {
+            const auto& positionOnSmall = (*m_vertices)[(*small)[i]];
+            size_t nearestIndexOnLarge = nearestIndex(positionOnSmall, *large);
+            smallToLargeNearest[i] = nearestIndexOnLarge;
+        }
+
+        // Remove duplicates: keep only one small vertex per large vertex
+        std::map<size_t, size_t> largeToSmallBest;
+        for (const auto& kv : smallToLargeNearest) {
+            size_t smallIdx = kv.first;
+            size_t largeIdx = kv.second;
+
+            auto existingMatch = largeToSmallBest.find(largeIdx);
+            if (existingMatch == largeToSmallBest.end()) {
+                largeToSmallBest[largeIdx] = smallIdx;
+            } else {
+                // Keep the one with smaller index for determinism
+                if (smallIdx < existingMatch->second) {
+                    largeToSmallBest[largeIdx] = smallIdx;
+                }
+            }
+        }
+
+        for (const auto& kv : largeToSmallBest) {
+            matchedPairs.push_back({ kv.second, kv.first });
+        }
+    }
+
+    // Sort matched pairs by small index to ensure deterministic ordering
+    std::sort(matchedPairs.begin(), matchedPairs.end(),
+        [](const std::pair<size_t, size_t>& a, const std::pair<size_t, size_t>& b) {
+            return a.first < b.first;
+        });
 
     if (matchedPairs.empty())
         return false;
@@ -353,18 +514,22 @@ bool MeshRecombiner::bridge(const std::vector<size_t>& first, const std::vector<
         size_t j = (i + 1) % matchedPairs.size();
         std::vector<size_t> smallSide;
         std::vector<size_t> largeSide;
-        for (size_t indexOnSmall = matchedPairs[i].first;
-             ;
-             indexOnSmall = (indexOnSmall + 1) % small->size()) {
+        for (size_t indexOnSmall = matchedPairs[i].first, steps = 0;
+            ;
+            indexOnSmall = (indexOnSmall + 1) % small->size(), ++steps) {
             smallSide.push_back((*small)[indexOnSmall]);
-            if (indexOnSmall == matchedPairs[j].first)
+            if (steps > 0 && indexOnSmall == matchedPairs[j].first)
+                break;
+            if (steps >= small->size())
                 break;
         }
-        for (size_t indexOnLarge = matchedPairs[j].second;
-             ;
-             indexOnLarge = (indexOnLarge + 1) % large->size()) {
+        for (size_t indexOnLarge = matchedPairs[j].second, steps = 0;
+            ;
+            indexOnLarge = (indexOnLarge + 1) % large->size(), ++steps) {
             largeSide.push_back((*large)[indexOnLarge]);
-            if (indexOnLarge == matchedPairs[i].second)
+            if (steps > 0 && indexOnLarge == matchedPairs[i].second)
+                break;
+            if (steps >= large->size())
                 break;
         }
         std::reverse(largeSide.begin(), largeSide.end());
@@ -374,48 +539,89 @@ bool MeshRecombiner::bridge(const std::vector<size_t>& first, const std::vector<
     return true;
 }
 
+bool MeshRecombiner::advanceSmallForBridgeQuad(const Vector3& smallCurrent, const Vector3& smallNext,
+    const Vector3& largeCurrent, const Vector3& largeNext)
+{
+    // The current bridge quad (smallCurrent, smallNext, largeNext, largeCurrent) can be split
+    // along one of two diagonals:
+    //   advance small -> diagonal (smallNext, largeCurrent)
+    //   advance large -> diagonal (smallCurrent, largeNext)
+    // The choice must be a deterministic function of geometry that is *equivariant* under the
+    // x = 0 mirror, so the left and right seams of an x-mirrored model are triangulated as exact
+    // reflections of each other (no mirror flag is carried into the recombiner).
+    const Vector3& diagonalIfAdvanceSmallA = smallNext;
+    const Vector3& diagonalIfAdvanceSmallB = largeCurrent;
+    const Vector3& diagonalIfAdvanceLargeA = smallCurrent;
+    const Vector3& diagonalIfAdvanceLargeB = largeNext;
+
+    // 1) Prefer the shorter diagonal. Lengths are invariant under reflection, so the mirrored
+    //    quad's shorter diagonal is the reflection of this quad's shorter diagonal.
+    const double LENGTH_EPSILON = 1e-6;
+    double diagonalSmall2 = (diagonalIfAdvanceSmallA - diagonalIfAdvanceSmallB).lengthSquared();
+    double diagonalLarge2 = (diagonalIfAdvanceLargeA - diagonalIfAdvanceLargeB).lengthSquared();
+    if (diagonalSmall2 + LENGTH_EPSILON < diagonalLarge2)
+        return true;
+    if (diagonalLarge2 + LENGTH_EPSILON < diagonalSmall2)
+        return false;
+
+    // 2) Equal-length diagonals (e.g. rectangular box seams). Break the tie purely from the
+    //    x-axis: orient each diagonal from its lower (y, then z) endpoint to its upper endpoint
+    //    (y and z never change under an x-mirror) and prefer the one whose ascent moves toward the
+    //    mirror plane (|x| decreasing). |x| and the (y, z) ordering are unchanged by negating x,
+    //    so the reflected seam evaluates the same predicate and selects the reflected diagonal.
+    auto towardPlaneScore = [](const Vector3& p, const Vector3& q) -> int {
+        const Vector3* lower = &p;
+        const Vector3* upper = &q;
+        if (upper->y() < lower->y() || (upper->y() == lower->y() && upper->z() < lower->z()))
+            std::swap(lower, upper);
+        double deltaAbsX = std::fabs(upper->x()) - std::fabs(lower->x());
+        if (deltaAbsX < 0.0)
+            return 1; // ascends toward the mirror plane
+        if (deltaAbsX > 0.0)
+            return -1; // ascends away from the mirror plane
+        return 0; // diagonal is vertical in x (e.g. lies in the symmetry plane)
+    };
+    int scoreSmall = towardPlaneScore(diagonalIfAdvanceSmallA, diagonalIfAdvanceSmallB);
+    int scoreLarge = towardPlaneScore(diagonalIfAdvanceLargeA, diagonalIfAdvanceLargeB);
+    if (scoreSmall != scoreLarge)
+        return scoreSmall > scoreLarge;
+
+    // 3) Both diagonals lie in (or parallel to) the symmetry plane: either split is self-mirrored.
+    //    Pick deterministically from x-invariant coordinates so the result is still stable.
+    double keyYSmall = std::min(diagonalIfAdvanceSmallA.y(), diagonalIfAdvanceSmallB.y());
+    double keyYLarge = std::min(diagonalIfAdvanceLargeA.y(), diagonalIfAdvanceLargeB.y());
+    if (keyYSmall != keyYLarge)
+        return keyYSmall < keyYLarge;
+    double keyZSmall = std::min(diagonalIfAdvanceSmallA.z(), diagonalIfAdvanceSmallB.z());
+    double keyZLarge = std::min(diagonalIfAdvanceLargeA.z(), diagonalIfAdvanceLargeB.z());
+    return keyZSmall <= keyZLarge;
+}
+
 void MeshRecombiner::fillPairs(const std::vector<size_t>& small, const std::vector<size_t>& large)
 {
-    std::vector<std::pair<std::array<Vector3, 3>, std::array<Vector2, 3>>> bridgingFaceUvs;
-
-    std::vector<double> leftV(small.size(), 0.0);
-    double leftOffset = 0.0;
-    for (size_t j = 1; j < small.size(); ++j) {
-        leftOffset += ((*m_vertices)[small[j]] - (*m_vertices)[small[j - 1]]).length();
-        leftV[j] = leftOffset;
-    }
-
-    std::vector<double> rightV(large.size(), 0.0);
-    double rightOffset = 0.0;
-    for (size_t j = 1; j < large.size(); ++j) {
-        rightOffset += ((*m_vertices)[large[j]] - (*m_vertices)[large[j - 1]]).length();
-        rightV[j] = rightOffset;
-    }
+    std::pair<std::vector<std::array<Vector3, 3>>, std::vector<std::array<Vector3, 3>>> bridgingTriangles;
 
     size_t smallIndex = 0;
     size_t largeIndex = 0;
     while (smallIndex + 1 < small.size() || largeIndex + 1 < large.size()) {
         if (smallIndex + 1 < small.size() && largeIndex + 1 < large.size()) {
-            float angleOnSmallEdgeLoop = Vector3::angleBetween((*m_vertices)[large[largeIndex]] - (*m_vertices)[small[smallIndex]],
-                (*m_vertices)[small[smallIndex + 1]] - (*m_vertices)[small[smallIndex]]);
-            float angleOnLargeEdgeLoop = Vector3::angleBetween((*m_vertices)[small[smallIndex]] - (*m_vertices)[large[largeIndex]],
-                (*m_vertices)[large[largeIndex + 1]] - (*m_vertices)[large[largeIndex]]);
-            if (angleOnSmallEdgeLoop < angleOnLargeEdgeLoop) {
+            // Choose the diagonal with a deterministic, x-mirror-equivariant rule so the left and
+            // right seams of an x-mirrored model are stitched as reflections of each other.
+            if (advanceSmallForBridgeQuad((*m_vertices)[small[smallIndex]],
+                    (*m_vertices)[small[smallIndex + 1]],
+                    (*m_vertices)[large[largeIndex]],
+                    (*m_vertices)[large[largeIndex + 1]])) {
                 m_regeneratedFaces.push_back({ small[smallIndex],
                     small[smallIndex + 1],
                     large[largeIndex] });
-                bridgingFaceUvs.emplace_back(std::make_pair(
-                    std::array<Vector3, 3> { (*m_vertices)[small[smallIndex]], (*m_vertices)[small[smallIndex + 1]], (*m_vertices)[large[largeIndex]] },
-                    std::array<Vector2, 3> { Vector2(0.0, leftV[smallIndex]), Vector2(0.0, leftV[smallIndex + 1]), Vector2(1.0, rightV[largeIndex]) }));
+                bridgingTriangles.second.push_back({ (*m_vertices)[small[smallIndex]], (*m_vertices)[small[smallIndex + 1]], (*m_vertices)[large[largeIndex]] });
                 ++smallIndex;
                 continue;
             }
             m_regeneratedFaces.push_back({ large[largeIndex + 1],
                 large[largeIndex],
                 small[smallIndex] });
-            bridgingFaceUvs.emplace_back(std::make_pair(
-                std::array<Vector3, 3> { (*m_vertices)[large[largeIndex + 1]], (*m_vertices)[large[largeIndex]], (*m_vertices)[small[smallIndex]] },
-                std::array<Vector2, 3> { Vector2(1.0, rightV[largeIndex + 1]), Vector2(1.0, rightV[largeIndex]), Vector2(0.0, rightV[largeIndex]) }));
+            bridgingTriangles.first.push_back({ (*m_vertices)[large[largeIndex + 1]], (*m_vertices)[large[largeIndex]], (*m_vertices)[small[smallIndex]] });
             ++largeIndex;
             continue;
         }
@@ -423,9 +629,7 @@ void MeshRecombiner::fillPairs(const std::vector<size_t>& small, const std::vect
             m_regeneratedFaces.push_back({ large[largeIndex + 1],
                 large[largeIndex],
                 small[smallIndex] });
-            bridgingFaceUvs.emplace_back(std::make_pair(
-                std::array<Vector3, 3> { (*m_vertices)[large[largeIndex + 1]], (*m_vertices)[large[largeIndex]], (*m_vertices)[small[smallIndex]] },
-                std::array<Vector2, 3> { Vector2(1.0, rightV[largeIndex + 1]), Vector2(1.0, rightV[largeIndex]), Vector2(0.0, rightV[largeIndex]) }));
+            bridgingTriangles.first.push_back({ (*m_vertices)[large[largeIndex + 1]], (*m_vertices)[large[largeIndex]], (*m_vertices)[small[smallIndex]] });
             ++largeIndex;
             continue;
         }
@@ -433,16 +637,14 @@ void MeshRecombiner::fillPairs(const std::vector<size_t>& small, const std::vect
             m_regeneratedFaces.push_back({ small[smallIndex],
                 small[smallIndex + 1],
                 large[largeIndex] });
-            bridgingFaceUvs.emplace_back(std::make_pair(
-                std::array<Vector3, 3> { (*m_vertices)[small[smallIndex]], (*m_vertices)[small[smallIndex + 1]], (*m_vertices)[large[largeIndex]] },
-                std::array<Vector2, 3> { Vector2(0.0, leftV[smallIndex]), Vector2(0.0, leftV[smallIndex + 1]), Vector2(1.0, rightV[largeIndex]) }));
+            bridgingTriangles.second.push_back({ (*m_vertices)[small[smallIndex]], (*m_vertices)[small[smallIndex + 1]], (*m_vertices)[large[largeIndex]] });
             ++smallIndex;
             continue;
         }
         break;
     }
 
-    m_generatedBridgingTriangleUvs.emplace_back(bridgingFaceUvs);
+    m_generatedBridgingTriangles.emplace_back(bridgingTriangles);
 }
 
 void MeshRecombiner::removeReluctantVertices()
@@ -468,9 +670,9 @@ void MeshRecombiner::removeReluctantVertices()
     m_regeneratedFaces = rearrangedFaces;
 }
 
-const std::vector<std::vector<std::pair<std::array<Vector3, 3>, std::array<Vector2, 3>>>>& MeshRecombiner::generatedBridgingTriangleUvs()
+const std::vector<std::pair<std::vector<std::array<Vector3, 3>>, std::vector<std::array<Vector3, 3>>>>& MeshRecombiner::generatedBridgingTriangles()
 {
-    return m_generatedBridgingTriangleUvs;
+    return m_generatedBridgingTriangles;
 }
 
 }

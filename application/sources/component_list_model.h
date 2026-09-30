@@ -20,6 +20,14 @@ public:
     QModelIndex componentIdToIndex(const dust3d::Uuid& componentId) const;
     const dust3d::Uuid modelIndexToComponentId(const QModelIndex& index) const;
     const dust3d::Uuid listingComponentId() const;
+    Qt::ItemFlags flags(const QModelIndex& index) const override;
+    Qt::DropActions supportedDropActions() const override;
+    QStringList mimeTypes() const override;
+    QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
+    bool hasStitchingLineOrdering() const;
+    bool hasStitchingLoopInfo() const;
+    bool hasUngroupedStitchingParts() const;
 public slots:
     void setListingComponentId(const dust3d::Uuid& componentId);
     void reload();

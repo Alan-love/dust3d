@@ -1,52 +1,62 @@
-QT += core gui opengl widgets svg network
+QT += core gui opengl widgets svg multimedia
+
+greaterThan(QT_MAJOR_VERSION, 5) {
+    QT += openglwidgets svgwidgets
+}
 
 TARGET = dust3d
 TEMPLATE = app
 
-HUMAN_VERSION = "1.0.0-rc.7"
-VERSION = 1.0.0.37
+HUMAN_VERSION = "1.1.7"
+VERSION = 1.1.7.0
 
 QMAKE_TARGET_COMPANY = Dust3D
 QMAKE_TARGET_PRODUCT = Dust3D
 QMAKE_TARGET_DESCRIPTION = "Dust3D is a cross-platform open-source 3D modeling software"
-QMAKE_TARGET_COPYRIGHT = "Copyright (C) 2018-2021 Dust3D Project. All Rights Reserved."
+QMAKE_TARGET_COPYRIGHT = "Copyright (C) 2018-2026 Dust3D Project. All Rights Reserved."
 
 HOMEPAGE_URL = "https://dust3d.org/"
 REPOSITORY_URL = "https://github.com/huxingyi/dust3d"
 ISSUES_URL = "https://github.com/huxingyi/dust3d/issues"
 REFERENCE_GUIDE_URL = "https://docs.dust3d.org"
-UPDATES_CHECKER_URL = "https://dust3d.org/dust3d-updateinfo.xml"
 
 DEFINES += QT_MESSAGELOGCONTEXT
 DEFINES += _USE_MATH_DEFINES
 CONFIG += object_parallel_to_source
 CONFIG += no_batch
 
+CONFIG += c++17
+
 CONFIG(release, debug|release) {
-    win32 {
-        QMAKE_CXXFLAGS += /MP
-        QMAKE_CXXFLAGS += /O2
-        QMAKE_CXXFLAGS += /bigobj
-        
-        CONFIG += force_debug_info
-    }
-
-    macx {
-        QMAKE_CXXFLAGS_RELEASE -= -O
-        QMAKE_CXXFLAGS_RELEASE -= -O1
-        QMAKE_CXXFLAGS_RELEASE -= -O2
-
-        QMAKE_CXXFLAGS_RELEASE += -O3
-    }
-
-    unix:!macx {
-        QMAKE_CXXFLAGS_RELEASE -= -O
-        QMAKE_CXXFLAGS_RELEASE -= -O1
-        QMAKE_CXXFLAGS_RELEASE -= -O2
-
-        QMAKE_CXXFLAGS_RELEASE += -O3
-    }
+    DEFINES += NDEBUG
 }
+
+win32 {
+    QMAKE_CXXFLAGS += /MP
+    QMAKE_CXXFLAGS += /O2
+    QMAKE_CXXFLAGS += /bigobj
+    
+    CONFIG += force_debug_info
+}
+
+macx {
+    QMAKE_CXXFLAGS_RELEASE -= -O
+    QMAKE_CXXFLAGS_RELEASE -= -O1
+    QMAKE_CXXFLAGS_RELEASE -= -O2
+
+    QMAKE_CXXFLAGS_RELEASE += -O3
+    QMAKE_CXXFLAGS += -Wno-error=implicit-function-declaration
+}
+
+unix:!macx {
+    QMAKE_CXXFLAGS_RELEASE -= -O
+    QMAKE_CXXFLAGS_RELEASE -= -O1
+    QMAKE_CXXFLAGS_RELEASE -= -O2
+
+    QMAKE_CXXFLAGS_RELEASE += -O3
+}
+
+QMAKE_LFLAGS += -Os
 
 PLATFORM = "Unknown"
 macx {
@@ -67,7 +77,6 @@ DEFINES += "PROJECT_DEFINED_APP_HOMEPAGE_URL=\"\\\"$$HOMEPAGE_URL\\\"\""
 DEFINES += "PROJECT_DEFINED_APP_REPOSITORY_URL=\"\\\"$$REPOSITORY_URL\\\"\""
 DEFINES += "PROJECT_DEFINED_APP_ISSUES_URL=\"\\\"$$ISSUES_URL\\\"\""
 DEFINES += "PROJECT_DEFINED_APP_REFERENCE_GUIDE_URL=\"\\\"$$REFERENCE_GUIDE_URL\\\"\""
-DEFINES += "PROJECT_DEFINED_APP_UPDATES_CHECKER_URL=\"\\\"$$UPDATES_CHECKER_URL\\\"\""
 DEFINES += "PROJECT_DEFINED_APP_PLATFORM=\"\\\"$$PLATFORM\\\"\""
 
 OBJECTS_DIR = obj
@@ -95,18 +104,20 @@ include(third_party/QtAwesome/QtAwesome/QtAwesome.pri)
 
 HEADERS += sources/about_widget.h
 SOURCES += sources/about_widget.cc
-HEADERS += sources/bone_generator.h
-SOURCES += sources/bone_generator.cc
-HEADERS += sources/bone_list_model.h
-SOURCES += sources/bone_list_model.cc
+HEADERS += sources/bone_structure.h
 HEADERS += sources/bone_manage_widget.h
 SOURCES += sources/bone_manage_widget.cc
-HEADERS += sources/bone_preview_grid_widget.h
-SOURCES += sources/bone_preview_grid_widget.cc
 HEADERS += sources/bone_property_widget.h
 SOURCES += sources/bone_property_widget.cc
+HEADERS += sources/rig_skeleton_mesh_generator.h
+SOURCES += sources/rig_skeleton_mesh_generator.cc
+HEADERS += sources/rig_skeleton_mesh_worker.h
+SOURCES += sources/rig_skeleton_mesh_worker.cc
+HEADERS += sources/rig_generator_worker.h
 HEADERS += sources/ccd_ik_resolver.h
 SOURCES += sources/ccd_ik_resolver.cc
+HEADERS += sources/component_breadcrumb_widget.h
+SOURCES += sources/component_breadcrumb_widget.cc
 HEADERS += sources/component_list_model.h
 SOURCES += sources/component_list_model.cc
 HEADERS += sources/component_preview_grid_widget.h
@@ -117,13 +128,10 @@ HEADERS += sources/component_property_widget.h
 SOURCES += sources/component_property_widget.cc
 HEADERS += sources/cut_face_preview.h
 SOURCES += sources/cut_face_preview.cc
-HEADERS += sources/dds_file.h
-SOURCES += sources/dds_file.cc
 HEADERS += sources/debug.h
 SOURCES += sources/debug.cc
 HEADERS += sources/document.h
 SOURCES += sources/document.cc
-SOURCES += sources/document_bone.cc
 SOURCES += sources/document_component.cc
 SOURCES += sources/document_edge.cc
 SOURCES += sources/document_node.cc
@@ -132,6 +140,10 @@ HEADERS += sources/document_saver.h
 SOURCES += sources/document_saver.cc
 HEADERS += sources/document_window.h
 SOURCES += sources/document_window.cc
+HEADERS += sources/steps_replay_window.h
+SOURCES += sources/steps_replay_window.cc
+HEADERS += sources/turnaround_overlay_widget.h
+SOURCES += sources/turnaround_overlay_widget.cc
 HEADERS += sources/fbx_file.h
 SOURCES += sources/fbx_file.cc
 HEADERS += sources/float_number_widget.h
@@ -140,6 +152,10 @@ HEADERS += sources/flow_layout.h
 SOURCES += sources/flow_layout.cc
 HEADERS += sources/glb_file.h
 SOURCES += sources/glb_file.cc
+HEADERS += sources/glb_forever.h
+SOURCES += sources/glb_forever.cc
+HEADERS += sources/glb_reader.h
+SOURCES += sources/glb_reader.cc
 HEADERS += sources/graphics_container_widget.h
 SOURCES += sources/graphics_container_widget.cc
 HEADERS += sources/horizontal_line_widget.h
@@ -172,6 +188,25 @@ SOURCES += sources/model_opengl_object.cc
 HEADERS += sources/model_opengl_vertex.h
 HEADERS += sources/model_widget.h
 SOURCES += sources/model_widget.cc
+HEADERS += sources/shadow_opengl_program.h
+SOURCES += sources/shadow_opengl_program.cc
+HEADERS += sources/scene_outline_opengl_program.h
+SOURCES += sources/scene_outline_opengl_program.cc
+HEADERS += sources/world_opengl_program.h
+SOURCES += sources/world_opengl_program.cc
+HEADERS += sources/world_ground_opengl_vertex.h
+HEADERS += sources/world_ground_opengl_object.h
+SOURCES += sources/world_ground_opengl_object.cc
+HEADERS += sources/world_ground_opengl_program.h
+SOURCES += sources/world_ground_opengl_program.cc
+HEADERS += sources/world_widget.h
+SOURCES += sources/world_widget.cc
+HEADERS += sources/scene_widget.h
+SOURCES += sources/scene_widget.cc
+HEADERS += sources/scene_opengl_program.h
+SOURCES += sources/scene_opengl_program.cc
+HEADERS += sources/scene_ground_opengl_program.h
+SOURCES += sources/scene_ground_opengl_program.cc
 HEADERS += sources/monochrome_mesh.h
 SOURCES += sources/monochrome_mesh.cc
 HEADERS += sources/monochrome_opengl_program.h
@@ -181,6 +216,16 @@ SOURCES += sources/monochrome_opengl_object.cc
 HEADERS += sources/monochrome_opengl_vertex.h
 HEADERS += sources/part_manage_widget.h
 SOURCES += sources/part_manage_widget.cc
+HEADERS += sources/animation_manage_widget.h
+SOURCES += sources/animation_manage_widget.cc
+HEADERS += sources/animation_preview_worker.h
+SOURCES += sources/animation_preview_worker.cc
+HEADERS += sources/preview_overlay_controller.h
+SOURCES += sources/preview_overlay_controller.cc
+HEADERS += sources/export_animation_worker.h
+SOURCES += sources/export_animation_worker.cc
+HEADERS += sources/export_progress_widget.h
+SOURCES += sources/export_progress_widget.cc
 HEADERS += sources/preferences.h
 SOURCES += sources/preferences.cc
 HEADERS += sources/preview_grid_view.h
@@ -203,12 +248,10 @@ HEADERS += sources/theme.h
 SOURCES += sources/theme.cc
 HEADERS += sources/toolbar_button.h
 SOURCES += sources/toolbar_button.cc
+HEADERS += sources/turnaround_image_editor_dialog.h
+SOURCES += sources/turnaround_image_editor_dialog.cc
 HEADERS += sources/turnaround_loader.h
 SOURCES += sources/turnaround_loader.cc
-HEADERS += sources/updates_check_widget.h
-SOURCES += sources/updates_check_widget.cc
-HEADERS += sources/updates_checker.h
-SOURCES += sources/updates_checker.cc
 HEADERS += sources/uv_map_generator.h
 SOURCES += sources/uv_map_generator.cc
 HEADERS += sources/version.h
@@ -261,10 +304,110 @@ SOURCES += ../dust3d/base/vector3.cc
 HEADERS += ../dust3d/base/vector2.h
 HEADERS += ../dust3d/base/uuid.h
 SOURCES += ../dust3d/base/uuid.cc
+HEADERS += ../dust3d/base/bone_binding.h
+HEADERS += ../dust3d/animation/animation_generator.h
+HEADERS += ../dust3d/animation/common.h
+HEADERS += ../dust3d/animation/insect/common.h
+HEADERS += ../dust3d/animation/insect/walk.h
+HEADERS += ../dust3d/animation/insect/rub_hands.h
+HEADERS += ../dust3d/animation/insect/fly.h
+HEADERS += ../dust3d/animation/insect/attack.h
+HEADERS += ../dust3d/animation/insect/die.h
+HEADERS += ../dust3d/animation/bird/fly.h
+HEADERS += ../dust3d/animation/bird/glide.h
+HEADERS += ../dust3d/animation/bird/attack.h
+HEADERS += ../dust3d/animation/bird/die.h
+HEADERS += ../dust3d/animation/bird/eat.h
+HEADERS += ../dust3d/animation/bird/run.h
+HEADERS += ../dust3d/animation/bird/walk.h
+HEADERS += ../dust3d/animation/fish/swim.h
+HEADERS += ../dust3d/animation/snake/slither.h
+HEADERS += ../dust3d/animation/snake/die.h
+HEADERS += ../dust3d/animation/quadruped/walk.h
 HEADERS += ../dust3d/mesh/base_normal.h
+SOURCES += ../dust3d/animation/animation_generator.cc
+HEADERS += ../dust3d/animation/sound_generator.h
+SOURCES += ../dust3d/animation/sound_generator.cc
+HEADERS += ../dust3d/animation/sound_event_detector.h
+SOURCES += ../dust3d/animation/sound_event_detector.cc
+SOURCES += ../dust3d/animation/insect/walk.cc
+SOURCES += ../dust3d/animation/insect/rub_hands.cc
+SOURCES += ../dust3d/animation/insect/fly.cc
+SOURCES += ../dust3d/animation/insect/attack.cc
+SOURCES += ../dust3d/animation/insect/die.cc
+SOURCES += ../dust3d/animation/bird/fly.cc
+SOURCES += ../dust3d/animation/bird/glide.cc
+SOURCES += ../dust3d/animation/bird/attack.cc
+SOURCES += ../dust3d/animation/bird/die.cc
+SOURCES += ../dust3d/animation/bird/eat.cc
+SOURCES += ../dust3d/animation/bird/run.cc
+SOURCES += ../dust3d/animation/bird/walk.cc
+SOURCES += ../dust3d/animation/fish/swim.cc
+SOURCES += ../dust3d/animation/fish/die.cc
+SOURCES += ../dust3d/animation/snake/slither.cc
+SOURCES += ../dust3d/animation/snake/die.cc
+SOURCES += ../dust3d/animation/quadruped/walk.cc
+HEADERS += ../dust3d/animation/biped/walk.h
+SOURCES += ../dust3d/animation/biped/walk.cc
+HEADERS += ../dust3d/animation/biped/run.h
+SOURCES += ../dust3d/animation/biped/run.cc
+HEADERS += ../dust3d/animation/biped/jump.h
+SOURCES += ../dust3d/animation/biped/jump.cc
+HEADERS += ../dust3d/animation/biped/die.h
+SOURCES += ../dust3d/animation/biped/die.cc
+HEADERS += ../dust3d/animation/biped/hurt.h
+SOURCES += ../dust3d/animation/biped/hurt.cc
+HEADERS += ../dust3d/animation/quadruped/run.h
+SOURCES += ../dust3d/animation/quadruped/run.cc
+HEADERS += ../dust3d/animation/quadruped/die.h
+SOURCES += ../dust3d/animation/quadruped/die.cc
+HEADERS += ../dust3d/animation/quadruped/attack.h
+SOURCES += ../dust3d/animation/quadruped/attack.cc
+HEADERS += ../dust3d/animation/quadruped/hurt.h
+SOURCES += ../dust3d/animation/quadruped/hurt.cc
+HEADERS += ../dust3d/animation/quadruped/eat.h
+SOURCES += ../dust3d/animation/quadruped/eat.cc
+HEADERS += ../dust3d/animation/quadruped/roar.h
+SOURCES += ../dust3d/animation/quadruped/roar.cc
+HEADERS += ../dust3d/animation/spider/run.h
+SOURCES += ../dust3d/animation/spider/run.cc
+HEADERS += ../dust3d/animation/spider/walk.h
+SOURCES += ../dust3d/animation/spider/walk.cc
+HEADERS += ../dust3d/animation/spider/die.h
+SOURCES += ../dust3d/animation/spider/die.cc
+HEADERS += ../dust3d/animation/biped/idle.h
+SOURCES += ../dust3d/animation/biped/idle.cc
+HEADERS += ../dust3d/animation/biped/roar.h
+SOURCES += ../dust3d/animation/biped/roar.cc
+HEADERS += ../dust3d/animation/biped/slam.h
+SOURCES += ../dust3d/animation/biped/slam.cc
+HEADERS += ../dust3d/animation/biped/stab.h
+SOURCES += ../dust3d/animation/biped/stab.cc
+HEADERS += ../dust3d/animation/biped/cast.h
+SOURCES += ../dust3d/animation/biped/cast.cc
+HEADERS += ../dust3d/animation/biped/channel.h
+SOURCES += ../dust3d/animation/biped/channel.cc
+HEADERS += ../dust3d/animation/quadruped/idle.h
+SOURCES += ../dust3d/animation/quadruped/idle.cc
+HEADERS += ../dust3d/animation/insect/idle.h
+SOURCES += ../dust3d/animation/insect/idle.cc
+HEADERS += ../dust3d/animation/spider/attack.h
+SOURCES += ../dust3d/animation/spider/attack.cc
+
+HEADERS += ../dust3d/animation/snake/strike.h
+SOURCES += ../dust3d/animation/snake/strike.cc
+
+HEADERS += ../dust3d/animation/biped/hop.h
+SOURCES += ../dust3d/animation/biped/hop.cc
+HEADERS += ../dust3d/animation/spider/idle.h
+SOURCES += ../dust3d/animation/spider/idle.cc
+HEADERS += ../dust3d/animation/bird/idle.h
+SOURCES += ../dust3d/animation/bird/idle.cc
+HEADERS += ../dust3d/animation/fish/idle.h
+SOURCES += ../dust3d/animation/fish/idle.cc
+HEADERS += ../dust3d/animation/snake/idle.h
+SOURCES += ../dust3d/animation/snake/idle.cc
 SOURCES += ../dust3d/mesh/base_normal.cc
-HEADERS += ../dust3d/mesh/box_mesh.h
-SOURCES += ../dust3d/mesh/box_mesh.cc
 HEADERS += ../dust3d/mesh/centripetal_catmull_rom_spline.h
 SOURCES += ../dust3d/mesh/centripetal_catmull_rom_spline.cc
 HEADERS += ../dust3d/mesh/solid_mesh.h
@@ -275,10 +418,6 @@ HEADERS += ../dust3d/mesh/hole_stitcher.h
 SOURCES += ../dust3d/mesh/hole_stitcher.cc
 HEADERS += ../dust3d/mesh/hole_wrapper.h
 SOURCES += ../dust3d/mesh/hole_wrapper.cc
-HEADERS += ../dust3d/mesh/isotropic_halfedge_mesh.h
-SOURCES += ../dust3d/mesh/isotropic_halfedge_mesh.cc
-HEADERS += ../dust3d/mesh/isotropic_remesher.h
-SOURCES += ../dust3d/mesh/isotropic_remesher.cc
 HEADERS += ../dust3d/mesh/mesh_combiner.h
 SOURCES += ../dust3d/mesh/mesh_combiner.cc
 HEADERS += ../dust3d/mesh/mesh_generator.h
@@ -294,24 +433,23 @@ HEADERS += ../dust3d/mesh/resolve_triangle_tangent.h
 SOURCES += ../dust3d/mesh/resolve_triangle_tangent.cc
 HEADERS += ../dust3d/mesh/rope_mesh.h
 SOURCES += ../dust3d/mesh/rope_mesh.cc
-HEADERS += ../dust3d/mesh/section_preview_mesh_builder.h
-SOURCES += ../dust3d/mesh/section_preview_mesh_builder.cc
 HEADERS += ../dust3d/mesh/section_remesher.h
 SOURCES += ../dust3d/mesh/section_remesher.cc
 HEADERS += ../dust3d/mesh/smooth_normal.h
 SOURCES += ../dust3d/mesh/smooth_normal.cc
+HEADERS += ../dust3d/mesh/spine_deformer.h
 HEADERS += ../dust3d/mesh/stitch_mesh_builder.h
 SOURCES += ../dust3d/mesh/stitch_mesh_builder.cc
+HEADERS += ../dust3d/mesh/stitch_loop_mesh_builder.h
+SOURCES += ../dust3d/mesh/stitch_loop_mesh_builder.cc
 HEADERS += ../dust3d/mesh/triangulate.h
 SOURCES += ../dust3d/mesh/triangulate.cc
 HEADERS += ../dust3d/mesh/trim_vertices.h
 SOURCES += ../dust3d/mesh/trim_vertices.cc
 HEADERS += ../dust3d/mesh/tube_mesh_builder.h
 SOURCES += ../dust3d/mesh/tube_mesh_builder.cc
-HEADERS += ../dust3d/mesh/weld_vertices.h
-SOURCES += ../dust3d/mesh/weld_vertices.cc
-HEADERS += ../dust3d/rig/bone_generator.h
-SOURCES += ../dust3d/rig/bone_generator.cc
+HEADERS += ../dust3d/rig/rig_generator.h
+SOURCES += ../dust3d/rig/rig_generator.cc
 HEADERS += ../dust3d/uv/chart_packer.h
 SOURCES += ../dust3d/uv/chart_packer.cc
 HEADERS += ../dust3d/uv/max_rectangles.h

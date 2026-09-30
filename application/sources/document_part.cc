@@ -9,97 +9,20 @@ Document::Part::Part(const dust3d::Uuid& withId)
     , deformThickness(1.0)
     , deformWidth(1.0)
     , deformUnified(false)
+    , interpolated(true)
+    , hard(false)
     , rounded(false)
     , chamfered(false)
-    , color(Qt::white)
-    , hasColor(false)
+    , fillLoopInterior(false)
     , dirty(true)
     , cutRotation(0.0)
     , cutFace(dust3d::CutFace::Quad)
     , target(dust3d::PartTarget::Model)
-    , colorSolubility(0.0)
     , metalness(0.0)
     , roughness(1.0)
     , hollowThickness(0.0)
-    , countershaded(false)
-    , smooth(false)
 {
     id = withId.isNull() ? dust3d::Uuid::createUuid() : withId;
-}
-
-bool Document::Part::hasPolyFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasSmoothFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasSubdivFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasRoundEndFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasMirrorFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasChamferFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasRotationFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasHollowFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasCutFaceFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasLayerFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasTargetFunction() const
-{
-    return true;
-}
-
-bool Document::Part::hasBaseFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasCombineModeFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasDeformFunction() const
-{
-    return dust3d::PartTarget::Model == target;
-}
-
-bool Document::Part::hasColorFunction() const
-{
-    return dust3d::PartTarget::Model == target;
 }
 
 void Document::Part::setDeformThickness(float toThickness)
@@ -160,11 +83,6 @@ bool Document::Part::deformAdjusted() const
     return deformThicknessAdjusted() || deformWidthAdjusted() || deformUnified;
 }
 
-bool Document::Part::colorSolubilityAdjusted() const
-{
-    return fabs(colorSolubility - 0.0) >= 0.01;
-}
-
 bool Document::Part::metalnessAdjusted() const
 {
     return fabs(metalness - 0.0) >= 0.01;
@@ -211,19 +129,18 @@ void Document::Part::copyAttributes(const Part& other)
     deformWidth = other.deformWidth;
     rounded = other.rounded;
     chamfered = other.chamfered;
-    color = other.color;
-    hasColor = other.hasColor;
     cutRotation = other.cutRotation;
     cutFace = other.cutFace;
     cutFaceLinkedId = other.cutFaceLinkedId;
     componentId = other.componentId;
     dirty = other.dirty;
     target = other.target;
-    colorSolubility = other.colorSolubility;
-    countershaded = other.countershaded;
     metalness = other.metalness;
+    emissive = other.emissive;
     roughness = other.roughness;
     deformUnified = other.deformUnified;
-    smooth = other.smooth;
+    interpolated = other.interpolated;
+    hard = other.hard;
     hollowThickness = other.hollowThickness;
+    importedModelId = other.importedModelId;
 }

@@ -35,7 +35,7 @@ void UvMapPacker::addPart(const Part& part)
     m_partTriangleUvs.push_back(part);
 }
 
-void UvMapPacker::addSeams(const std::vector<std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>>& seamTriangleUvs)
+void UvMapPacker::addSeams(const std::vector<std::pair<std::set<std::array<PositionKey, 3>>, std::set<std::array<PositionKey, 3>>>>& seamTriangleUvs)
 {
     for (const auto& it : seamTriangleUvs)
         m_seams.push_back(it);
@@ -64,17 +64,49 @@ void UvMapPacker::resolveSeamUvs()
         }
     }
 
+    // First pass: resolve large-side bridging triangles using the large edge (triangle[0]->triangle[1])
+    std::map<std::array<PositionKey, 2>, TriangleUv> newHalfEdgeToUvMap;
     for (size_t seamIndex = 0; seamIndex < m_seams.size(); ++seamIndex) {
         const auto& seam = m_seams[seamIndex];
-        for (const auto& triangle : seam) {
-            auto findUv = halfEdgeToUvMap.find({ triangle.first[0], triangle.first[1] });
+        for (const auto& triangle : seam.first) {
+            auto findUv = halfEdgeToUvMap.find({ triangle[0], triangle[1] });
             if (findUv == halfEdgeToUvMap.end())
                 continue;
             const auto& triangleUv = findUv->second;
-            m_partTriangleUvs[triangleUv.partIndex].localUv.insert({ triangle.first,
-                triangleUv.uv });
+            m_partTriangleUvs[triangleUv.partIndex].localUv.insert({ triangle, triangleUv.uv });
+            newHalfEdgeToUvMap.insert({ { triangle[1], triangle[0] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[1], triangleUv.uv[0], triangleUv.uv[2] } } });
+            newHalfEdgeToUvMap.insert({ { triangle[2], triangle[1] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[2], triangleUv.uv[1], triangleUv.uv[0] } } });
+            newHalfEdgeToUvMap.insert({ { triangle[0], triangle[2] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[0], triangleUv.uv[2], triangleUv.uv[1] } } });
         }
     }
+
+    // Second pass: iteratively resolve small-side bridging triangles, propagating newly resolved edges
+    std::map<std::array<PositionKey, 2>, TriangleUv> resolvedSmallHalfEdgeToUvMap;
+    size_t resolvedCount;
+    do {
+        resolvedCount = 0;
+        for (size_t seamIndex = 0; seamIndex < m_seams.size(); ++seamIndex) {
+            const auto& seam = m_seams[seamIndex];
+            for (const auto& triangle : seam.second) {
+                for (size_t k = 0; k < 3; ++k) {
+                    auto findUv = newHalfEdgeToUvMap.find({ triangle[k], triangle[(k + 1) % 3] });
+                    if (findUv == newHalfEdgeToUvMap.end())
+                        continue;
+                    const auto& triangleUv = findUv->second;
+                    auto insertResult = m_partTriangleUvs[triangleUv.partIndex].localUv.insert({ triangle, triangleUv.uv });
+                    if (insertResult.second) {
+                        ++resolvedCount;
+                        resolvedSmallHalfEdgeToUvMap.insert({ { triangle[1], triangle[0] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[1], triangleUv.uv[0], triangleUv.uv[2] } } });
+                        resolvedSmallHalfEdgeToUvMap.insert({ { triangle[2], triangle[1] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[2], triangleUv.uv[1], triangleUv.uv[0] } } });
+                        resolvedSmallHalfEdgeToUvMap.insert({ { triangle[0], triangle[2] }, TriangleUv { triangleUv.partIndex, { triangleUv.uv[0], triangleUv.uv[2], triangleUv.uv[1] } } });
+                    }
+                    break;
+                }
+            }
+        }
+        for (const auto& it : resolvedSmallHalfEdgeToUvMap)
+            newHalfEdgeToUvMap.insert(it);
+    } while (resolvedCount > 0);
 }
 
 void UvMapPacker::pack()
@@ -105,7 +137,9 @@ void UvMapPacker::pack()
         auto& flipped = std::get<4>(result);
         //dust3dDebug << "left:" << left << "top:" << top << "width:" << width << "height:" << height << "flipped:" << flipped;
         Layout layout;
+        layout.color = part.color;
         layout.id = part.id;
+        layout.sourceId = part.sourceId;
         layout.flipped = flipped;
         if (flipped) {
             layout.left = left;

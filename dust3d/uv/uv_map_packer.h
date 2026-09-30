@@ -24,10 +24,12 @@
 #define DUST3D_UV_MAP_PACKER_H_
 
 #include <array>
+#include <dust3d/base/color.h>
 #include <dust3d/base/position_key.h>
 #include <dust3d/base/uuid.h>
 #include <dust3d/base/vector2.h>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -37,6 +39,8 @@ class UvMapPacker {
 public:
     struct Part {
         Uuid id;
+        Uuid sourceId; // the component this chart belongs to (for material maps)
+        Color color;
         double width = 0.0;
         double height = 0.0;
         std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>> localUv;
@@ -44,6 +48,8 @@ public:
 
     struct Layout {
         Uuid id;
+        Uuid sourceId;
+        Color color;
         double left = 0.0;
         double top = 0.0;
         double width = 0.0;
@@ -54,7 +60,7 @@ public:
 
     UvMapPacker();
     void addPart(const Part& part);
-    void addSeams(const std::vector<std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>>& seamTriangleUvs);
+    void addSeams(const std::vector<std::pair<std::set<std::array<PositionKey, 3>>, std::set<std::array<PositionKey, 3>>>>& seamTriangleUvs);
     void pack();
     const std::vector<Layout>& packedLayouts();
     double packedTextureSize();
@@ -62,7 +68,7 @@ public:
 private:
     std::vector<Part> m_partTriangleUvs;
     std::vector<Layout> m_packedLayouts;
-    std::vector<std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> m_seams;
+    std::vector<std::pair<std::set<std::array<PositionKey, 3>>, std::set<std::array<PositionKey, 3>>>> m_seams;
     double m_packedTextureSize = 0.0;
 
     void resolveSeamUvs();

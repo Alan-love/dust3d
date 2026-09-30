@@ -1,5 +1,21 @@
 #include "component_preview_grid_widget.h"
 #include "component_list_model.h"
+#include "theme.h"
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QMimeData>
+#include <QPainter>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QVBoxLayout>
+#include <algorithm>
 #include <memory>
 
 ComponentPreviewGridWidget::ComponentPreviewGridWidget(Document* document, QWidget* parent)
@@ -8,6 +24,96 @@ ComponentPreviewGridWidget::ComponentPreviewGridWidget(Document* document, QWidg
 {
     m_componentListModel = std::make_unique<ComponentListModel>(m_document);
     setModel(m_componentListModel.get());
+
+    // Enable drag and drop support
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDefaultDropAction(Qt::DropAction::MoveAction);
+    setDragDropMode(QAbstractItemView::DragDrop);
+    setDropIndicatorShown(true);
+
+    // Info bar: sits above the viewport as a real child widget
+    m_infoBar = new QFrame(this);
+    m_infoBar->setAutoFillBackground(true);
+    {
+        QPalette pal = m_infoBar->palette();
+        pal.setColor(QPalette::Window, QColor(Theme::blue.red(), Theme::blue.green(), Theme::blue.blue(), 160));
+        m_infoBar->setPalette(pal);
+    }
+    m_infoBarLabel = new QLabel;
+    m_infoBarLabel->setText(tr("Stitching line: line order matters, drag to reorder"));
+    m_infoBarLabel->setStyleSheet("color: white;");
+    m_infoBarLabel->setFont([]() {
+        QFont f = QGuiApplication::font();
+        f.setPixelSize(qMax(10, qRound(QGuiApplication::font().pixelSize() * 0.8)));
+        return f;
+    }());
+    m_infoBarLabel->setWordWrap(true);
+    {
+        QHBoxLayout* barLayout = new QHBoxLayout(m_infoBar);
+        barLayout->setContentsMargins(6, 2, 6, 2);
+        barLayout->addWidget(m_infoBarLabel);
+    }
+    m_infoBar->hide();
+
+    // Stitching loop info bar
+    m_infoBar2 = new QFrame(this);
+    m_infoBar2->setAutoFillBackground(true);
+    {
+        QPalette pal = m_infoBar2->palette();
+        pal.setColor(QPalette::Window, QColor(Theme::blue.red(), Theme::blue.green(), Theme::blue.blue(), 160));
+        m_infoBar2->setPalette(pal);
+    }
+    m_infoBar2Label = new QLabel;
+    m_infoBar2Label->setText(tr("Stitching loop: edge loops must not overlap, and are auto x-mirrored"));
+    m_infoBar2Label->setStyleSheet("color: white;");
+    m_infoBar2Label->setWordWrap(true);
+    m_infoBar2Label->setFont([]() {
+        QFont f = QGuiApplication::font();
+        f.setPixelSize(qMax(10, qRound(QGuiApplication::font().pixelSize() * 0.8)));
+        return f;
+    }());
+    {
+        QHBoxLayout* bar2Layout = new QHBoxLayout(m_infoBar2);
+        bar2Layout->setContentsMargins(6, 2, 6, 2);
+        bar2Layout->addWidget(m_infoBar2Label);
+    }
+    m_infoBar2->hide();
+
+    // Ungrouped stitching parts info bar (shown at root level)
+    m_infoBar3 = new QFrame(this);
+    m_infoBar3->setAutoFillBackground(true);
+    {
+        QPalette pal = m_infoBar3->palette();
+        pal.setColor(QPalette::Window, QColor(Theme::blue.red(), Theme::blue.green(), Theme::blue.blue(), 130));
+        m_infoBar3->setPalette(pal);
+    }
+    m_infoBar3Label = new QLabel;
+    m_infoBar3Label->setText(tr("\u24d8  Stitching line/loop parts must be inside a group to configure stitching parameters"));
+    m_infoBar3Label->setStyleSheet("color: white;");
+    m_infoBar3Label->setWordWrap(true);
+    m_infoBar3Label->setFont([]() {
+        QFont f = QGuiApplication::font();
+        f.setPixelSize(qMax(10, qRound(QGuiApplication::font().pixelSize() * 0.8)));
+        return f;
+    }());
+    {
+        QHBoxLayout* bar3Layout = new QHBoxLayout(m_infoBar3);
+        bar3Layout->setContentsMargins(6, 2, 6, 2);
+        bar3Layout->addWidget(m_infoBar3Label);
+    }
+    m_infoBar3->hide();
+
+    connect(m_componentListModel.get(), &ComponentListModel::listingComponentChanged, this, [this](const dust3d::Uuid&) {
+        updateInfoBar();
+    });
+    connect(m_document, &Document::componentChildrenChanged, this, [this](const dust3d::Uuid& componentId) {
+        if (componentId == m_componentListModel->listingComponentId())
+            updateInfoBar();
+    });
+    connect(m_document, &Document::partTargetChanged, this, [this](const dust3d::Uuid&) {
+        updateInfoBar();
+    });
 
     connect(this, &ComponentPreviewGridWidget::doubleClicked, [this](const QModelIndex& index) {
         const Document::Component* component = this->componentListModel()->modelIndexToComponent(index);
@@ -65,4 +171,351 @@ std::vector<dust3d::Uuid> ComponentPreviewGridWidget::getSelectedPartIds() const
         partIds.push_back(component->linkToPartId);
     }
     return partIds;
+}
+
+void ComponentPreviewGridWidget::startDrag(Qt::DropActions supportedActions)
+{
+    // Get selected indexes
+    QModelIndexList selectedIndexes = selectionModel()->selectedIndexes();
+    if (selectedIndexes.isEmpty())
+        return;
+
+    // Create MIME data
+    QMimeData* mimeData = model()->mimeData(selectedIndexes);
+    if (!mimeData)
+        return;
+
+    // Start the drag operation
+    Qt::DropAction dropAction = Qt::MoveAction;
+    if (supportedActions & Qt::MoveAction && defaultDropAction() != Qt::IgnoreAction)
+        dropAction = defaultDropAction();
+
+    QDrag* drag = new QDrag(this);
+    drag->setMimeData(mimeData);
+
+    // Set a pixmap as visual feedback (use the first selected item's icon)
+    QVariant decoration = model()->data(selectedIndexes.first(), Qt::DecorationRole);
+    if (decoration.type() == QVariant::Pixmap) {
+        QPixmap sourcePixmap = qvariant_cast<QPixmap>(decoration);
+        qreal dpr = sourcePixmap.devicePixelRatio();
+        int halfSize = qRound(Theme::partPreviewImageSize / 2 * dpr);
+        QPixmap scaledPixmap = sourcePixmap.scaled(QSize(halfSize, halfSize), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        scaledPixmap.setDevicePixelRatio(dpr);
+        drag->setPixmap(scaledPixmap);
+    }
+
+    drag->exec(supportedActions, dropAction);
+}
+
+void ComponentPreviewGridWidget::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasFormat("application/x-qabstractitemmodeldatalist")) {
+        event->acceptProposedAction();
+        m_isDragging = true;
+    }
+    QListView::dragEnterEvent(event);
+}
+
+void ComponentPreviewGridWidget::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (event->mimeData()->hasFormat("application/x-qabstractitemmodeldatalist")) {
+        event->acceptProposedAction();
+
+        // Calculate the drop index
+        QModelIndex dropIndex = indexAt(event->pos());
+        if (!dropIndex.isValid() && m_componentListModel->rowCount() > 0) {
+            m_dropIndicatorRow = m_componentListModel->rowCount();
+        } else if (dropIndex.isValid()) {
+            m_dropIndicatorRow = dropIndex.row();
+        } else {
+            m_dropIndicatorRow = -1;
+        }
+
+        // Trigger repaint to show drop hint
+        viewport()->update();
+    }
+    QListView::dragMoveEvent(event);
+}
+
+void ComponentPreviewGridWidget::dropEvent(QDropEvent* event)
+{
+    if (!event->mimeData()->hasFormat("application/x-qabstractitemmodeldatalist")) {
+        event->ignore();
+        m_isDragging = false;
+        m_dropIndicatorRow = -1;
+        viewport()->update();
+        return;
+    }
+
+    // Get the drop position
+    QModelIndex dropIndex = indexAt(event->pos());
+    if (!dropIndex.isValid() && m_componentListModel->rowCount() > 0) {
+        // If no item under cursor but there are items, drop at the end
+        dropIndex = m_componentListModel->index(m_componentListModel->rowCount() - 1, 0);
+    }
+    int dropRow = dropIndex.isValid() ? dropIndex.row() : m_componentListModel->rowCount();
+
+    // Check if dropping onto a group component
+    const Document::Component* dropTargetComponent = dropIndex.isValid()
+        ? m_componentListModel->modelIndexToComponent(dropIndex)
+        : nullptr;
+    bool dropTargetIsGroup = dropTargetComponent && !dropTargetComponent->childrenIds.empty();
+
+    // Get the source items (selected rows)
+    QModelIndexList selectedIndexes = selectionModel()->selectedIndexes();
+    if (selectedIndexes.isEmpty()) {
+        event->ignore();
+        m_isDragging = false;
+        m_dropIndicatorRow = -1;
+        viewport()->update();
+        return;
+    }
+
+    // Sort selected indexes in ascending order
+    std::sort(selectedIndexes.begin(), selectedIndexes.end(), [](const QModelIndex& a, const QModelIndex& b) {
+        return a.row() < b.row();
+    });
+
+    // Get first selected row
+    int firstSelectedRow = selectedIndexes.first().row();
+    int lastSelectedRow = selectedIndexes.last().row();
+
+    // Build a new order by:
+    // 1. Starting with all component IDs
+    // 2. Removing selected items
+    // 3. Inserting them at the drop position
+
+    const dust3d::Uuid listingComponentId = m_componentListModel->listingComponentId();
+    const Document::Component* listingComponent = m_document->findComponent(listingComponentId);
+    if (nullptr == listingComponent) {
+        event->ignore();
+        return;
+    }
+
+    // Create a vector of all component IDs in current order
+    std::vector<dust3d::Uuid> allComponentIds = listingComponent->childrenIds;
+
+    // Collect selected component IDs
+    std::vector<dust3d::Uuid> selectedComponentIds;
+    for (const auto& index : selectedIndexes) {
+        const dust3d::Uuid componentId = m_componentListModel->modelIndexToComponentId(index);
+        if (!componentId.isNull()) {
+            selectedComponentIds.push_back(componentId);
+        }
+    }
+
+    if (selectedComponentIds.empty()) {
+        event->ignore();
+        return;
+    }
+
+    // If dropping onto a group, ask user whether to move into the group
+    if (dropTargetIsGroup) {
+        // Build a custom dialog: question + [src preview] -> [dst preview]
+        QDialog dlg(this);
+        dlg.setWindowTitle(tr("Move into Group"));
+
+        QVBoxLayout* vLayout = new QVBoxLayout(&dlg);
+
+        QLabel* questionLabel = new QLabel(tr("Do you want to move the selected component(s) into the group?"), &dlg);
+        questionLabel->setWordWrap(true);
+        vLayout->addWidget(questionLabel);
+
+        QHBoxLayout* previewLayout = new QHBoxLayout;
+        previewLayout->setSpacing(8);
+
+        auto makePreviewLabel = [&dlg](const QPixmap& pixmap) -> QLabel* {
+            QLabel* lbl = new QLabel(&dlg);
+            lbl->setFixedSize(64, 64);
+            lbl->setAlignment(Qt::AlignCenter);
+            if (!pixmap.isNull())
+                lbl->setPixmap(pixmap.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            else
+                lbl->setText(tr("?"));
+            return lbl;
+        };
+
+        // Source: first selected component
+        const Document::Component* srcComponent = m_document->findComponent(selectedComponentIds.front());
+        QPixmap srcPixmap = srcComponent ? srcComponent->previewPixmap : QPixmap();
+        previewLayout->addWidget(makePreviewLabel(srcPixmap));
+
+        QLabel* arrowLabel = new QLabel("→", &dlg);
+        arrowLabel->setAlignment(Qt::AlignCenter);
+        previewLayout->addWidget(arrowLabel);
+
+        previewLayout->addWidget(makePreviewLabel(dropTargetComponent->previewPixmap));
+        previewLayout->addStretch();
+        vLayout->addLayout(previewLayout);
+
+        QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Yes | QDialogButtonBox::No, &dlg);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        vLayout->addWidget(buttons);
+
+        if (dlg.exec() == QDialog::Accepted) {
+            for (const auto& componentId : selectedComponentIds) {
+                m_document->moveComponent(componentId, dropTargetComponent->id);
+            }
+            m_isDragging = false;
+            m_dropIndicatorRow = -1;
+            viewport()->update();
+            event->accept();
+            m_document->saveSnapshot();
+            return;
+        }
+        // If No, fall through to reorder behavior
+    }
+
+    // Remove selected items from the all list (in reverse to maintain indices)
+    for (int i = (int)allComponentIds.size() - 1; i >= 0; --i) {
+        for (const auto& selectedId : selectedComponentIds) {
+            if (allComponentIds[i] == selectedId) {
+                allComponentIds.erase(allComponentIds.begin() + i);
+                break;
+            }
+        }
+    }
+
+    // Calculate insert position
+    // Count how many selected items are before the drop row
+    int itemsBeforeDrop = 0;
+    for (const auto& index : selectedIndexes) {
+        if (index.row() < dropRow) {
+            itemsBeforeDrop++;
+        }
+    }
+
+    // Calculate insert position based on direction
+    int insertPos;
+    if (dropRow > lastSelectedRow) {
+        // Dropping after all selected items: account for all removed items
+        insertPos = dropRow - selectedComponentIds.size() + 1;
+    } else {
+        // Dropping before/within: account only for items removed before dropRow
+        insertPos = dropRow - itemsBeforeDrop;
+    }
+
+    // Clamp to valid range
+    if (insertPos < 0)
+        insertPos = 0;
+    if (insertPos > (int)allComponentIds.size())
+        insertPos = (int)allComponentIds.size();
+
+    // Insert selected items at the new position
+    for (int i = 0; i < (int)selectedComponentIds.size(); ++i) {
+        allComponentIds.insert(allComponentIds.begin() + insertPos + i, selectedComponentIds[i]);
+    }
+
+    // Now apply this new order to the document
+    for (int i = 0; i < (int)allComponentIds.size(); ++i) {
+        m_document->moveComponentToIndex(allComponentIds[i], i);
+    }
+
+    m_isDragging = false;
+    m_dropIndicatorRow = -1;
+    viewport()->update();
+    event->accept();
+
+    if (!allComponentIds.empty()) {
+        m_document->saveSnapshot();
+    }
+}
+
+void ComponentPreviewGridWidget::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    m_isDragging = false;
+    m_dropIndicatorRow = -1;
+    viewport()->update();
+    QListView::dragLeaveEvent(event);
+}
+
+void ComponentPreviewGridWidget::resizeEvent(QResizeEvent* event)
+{
+    QListView::resizeEvent(event);
+    updateInfoBar();
+}
+
+void ComponentPreviewGridWidget::showEvent(QShowEvent* event)
+{
+    QListView::showEvent(event);
+    updateInfoBar();
+}
+
+void ComponentPreviewGridWidget::updateInfoBar()
+{
+    if (!m_infoBar || !m_infoBar2 || !m_infoBar3)
+        return;
+
+    bool showLine = m_componentListModel->hasStitchingLineOrdering();
+    bool showLoop = m_componentListModel->hasStitchingLoopInfo();
+    int totalH = 0;
+
+    if (showLine) {
+        m_infoBarLabel->setFixedWidth(qMax(1, width() - 12));
+        int h = m_infoBar->sizeHint().height();
+        m_infoBar->setGeometry(0, 0, width(), h);
+        m_infoBar->show();
+        m_infoBar->raise();
+        totalH += h;
+    } else {
+        m_infoBar->hide();
+    }
+
+    if (showLoop) {
+        m_infoBar2Label->setFixedWidth(qMax(1, width() - 12));
+        int h = m_infoBar2->sizeHint().height();
+        m_infoBar2->setGeometry(0, totalH, width(), h);
+        m_infoBar2->show();
+        m_infoBar2->raise();
+        totalH += h;
+    } else {
+        m_infoBar2->hide();
+    }
+
+    bool showUngrouped = m_componentListModel->hasUngroupedStitchingParts();
+    if (showUngrouped) {
+        m_infoBar3Label->setFixedWidth(qMax(1, width() - 12));
+        int h = m_infoBar3->sizeHint().height();
+        m_infoBar3->setGeometry(0, totalH, width(), h);
+        m_infoBar3->show();
+        m_infoBar3->raise();
+        totalH += h;
+    } else {
+        m_infoBar3->hide();
+    }
+
+    setViewportMargins(0, totalH, 0, 0);
+}
+
+void ComponentPreviewGridWidget::paintEvent(QPaintEvent* event)
+{
+    // Call the parent paint event first
+    QListView::paintEvent(event);
+
+    // Draw drop hint indicator if dragging
+    if (m_isDragging && m_dropIndicatorRow >= 0) {
+        QPainter painter(viewport());
+
+        // Get the target item rectangle
+        QRect targetRect;
+
+        if (m_dropIndicatorRow < m_componentListModel->rowCount()) {
+            QModelIndex index = m_componentListModel->index(m_dropIndicatorRow, 0);
+            targetRect = visualRect(index);
+        } else {
+            // If dropping at the end, try to estimate the position from the last item
+            if (m_componentListModel->rowCount() > 0) {
+                QModelIndex lastIndex = m_componentListModel->index(m_componentListModel->rowCount() - 1, 0);
+                QRect lastItemRect = visualRect(lastIndex);
+                targetRect = lastItemRect.translated(0, lastItemRect.height() + 5);
+            }
+        }
+
+        if (targetRect.isValid()) {
+            // Draw a dashed border around the target item place
+            painter.setPen(QPen(Theme::red, 2, Qt::DashLine));
+            painter.drawRect(targetRect);
+        }
+    }
 }

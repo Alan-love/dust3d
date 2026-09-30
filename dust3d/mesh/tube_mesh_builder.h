@@ -45,11 +45,11 @@ public:
 
     TubeMeshBuilder(const BuildParameters& buildParameters, std::vector<MeshNode>&& nodes, bool isCircle);
     void build();
-    const Vector3& generatedBaseNormal();
-    const std::vector<Vector3>& generatedVertices();
-    const std::vector<Uuid>& generatedVertexSources();
-    const std::vector<std::vector<size_t>>& generatedFaces();
-    const std::vector<std::vector<Vector2>>& generatedFaceUvs();
+    const Vector3& generatedBaseNormal() const;
+    const std::vector<Vector3>& generatedVertices() const;
+    const std::vector<Uuid>& generatedVertexSources() const;
+    const std::vector<std::vector<size_t>>& generatedFaces() const;
+    const std::vector<std::vector<Vector2>>& generatedFaceUvs() const;
 
 private:
     BuildParameters m_buildParameters;
@@ -64,13 +64,16 @@ private:
     Vector3 m_generatedBaseNormal;
     bool m_isCircle = false;
     double m_maxNodeRadius = 0.0;
-    void preprocessNodes();
+    bool preprocessNodes();
     void buildNodePositionAndDirections();
     std::vector<Vector3> buildCutFaceVertices(const Vector3& origin,
         double radius,
-        const Vector3& forwardDirection);
+        const Vector3& forwardDirection,
+        double nodeDeformWidth = 1.0,
+        double nodeDeformThickness = 1.0);
+    void turnSingleNodeToTube();
     void applyRoundEnd();
-    void applyInterpolation();
+    bool applyInterpolation(size_t maxNodes);
     void addCap(const std::vector<size_t>& section, double ringV, double centerV, bool reverseU);
 };
 

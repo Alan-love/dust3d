@@ -33,6 +33,10 @@ PartTarget PartTargetFromString(const char* targetString)
         return PartTarget::CutFace;
     if (target == "StitchingLine")
         return PartTarget::StitchingLine;
+    if (target == "StitchingLoop")
+        return PartTarget::StitchingLoop;
+    if (target == "ImportedModel")
+        return PartTarget::ImportedModel;
     return PartTarget::Model;
 }
 
@@ -45,6 +49,10 @@ const char* PartTargetToString(PartTarget target)
         return "CutFace";
     case PartTarget::StitchingLine:
         return "StitchingLine";
+    case PartTarget::StitchingLoop:
+        return "StitchingLoop";
+    case PartTarget::ImportedModel:
+        return "ImportedModel";
     default:
         return "Model";
     }
@@ -59,6 +67,10 @@ std::string PartTargetToDispName(PartTarget target)
         return std::string("Cut Face");
     case PartTarget::StitchingLine:
         return std::string("Stitching Line");
+    case PartTarget::StitchingLoop:
+        return std::string("Stitching Loop");
+    case PartTarget::ImportedModel:
+        return std::string("Imported Model");
     default:
         return std::string("Model");
     }

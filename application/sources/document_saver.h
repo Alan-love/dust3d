@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <dust3d/base/ds3_file.h>
 #include <dust3d/base/snapshot.h>
 #include <dust3d/base/uuid.h>
 #include <map>
@@ -19,8 +20,15 @@ public:
     static bool save(const QString* filename,
         dust3d::Snapshot* snapshot,
         const QByteArray* turnaroundPngByteArray);
+    static bool save(QByteArray& byteArray,
+        dust3d::Snapshot* snapshot,
+        const QByteArray* turnaroundPngByteArray);
+    static bool save(dust3d::Ds3FileWriter& ds3Writer,
+        dust3d::Snapshot* snapshot,
+        const QByteArray* turnaroundPngByteArray);
     static void collectUsedResourceIds(const dust3d::Snapshot* snapshot,
-        std::set<dust3d::Uuid>& imageIds);
+        std::set<dust3d::Uuid>& imageIds,
+        std::set<dust3d::Uuid>& glbIds);
 signals:
     void finished();
 public slots:

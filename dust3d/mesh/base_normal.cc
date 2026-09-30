@@ -20,6 +20,7 @@
  *  SOFTWARE.
  */
 
+#include <dust3d/base/debug.h>
 #include <dust3d/mesh/base_normal.h>
 
 namespace dust3d {
@@ -34,8 +35,7 @@ std::pair<size_t, int> BaseNormal::findNearestAxis(const Vector3& direction)
         auto dot = Vector3::dotProduct(axis, direction);
         auto positiveDot = std::abs(dot);
         if (positiveDot >= maxDot) {
-            if (dot < 0)
-                positive = -1;
+            positive = dot < 0 ? -1 : 1;
             maxDot = positiveDot;
             nearAxisIndex = i;
         }
@@ -54,8 +54,8 @@ std::vector<Vector3> BaseNormal::calculateCircleVertices(double radius,
     std::vector<Vector3> circlePoints;
     circlePoints.reserve(points);
     for (double angle = stepAngle * -0.5;
-         circlePoints.size() < points;
-         angle += stepAngle) {
+        circlePoints.size() < points;
+        angle += stepAngle) {
         circlePoints.push_back(origin + startDirection.rotated(aroundAxis, angle) * radius);
     }
     return circlePoints;

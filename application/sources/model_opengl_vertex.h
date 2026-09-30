@@ -5,8 +5,7 @@
 
 #pragma pack(push)
 #pragma pack(1)
-typedef struct
-{
+struct ModelOpenGLVertex {
     GLfloat posX;
     GLfloat posY;
     GLfloat posZ;
@@ -23,8 +22,8 @@ typedef struct
     GLfloat tangentX;
     GLfloat tangentY;
     GLfloat tangentZ;
-    GLfloat alpha = 1.0;
-} ModelOpenGLVertex;
+    GLfloat alpha = 1.0f;
+};
 #pragma pack(pop)
 
 #endif

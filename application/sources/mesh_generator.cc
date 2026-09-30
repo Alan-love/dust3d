@@ -1,6 +1,8 @@
 
 #include "mesh_generator.h"
 #include "cut_face_preview.h"
+#include "glb_reader.h"
+#include "image_forever.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <dust3d/mesh/smooth_normal.h>
@@ -20,9 +22,63 @@ std::map<dust3d::Uuid, std::unique_ptr<ModelMesh>>* MeshGenerator::takeComponent
     return m_componentPreviewMeshes.release();
 }
 
+std::map<dust3d::Uuid, std::unique_ptr<QImage>>* MeshGenerator::takeComponentPreviewImages()
+{
+    return m_componentPreviewImages.release();
+}
+
 MonochromeMesh* MeshGenerator::takeWireframeMesh()
 {
     return m_wireframeMesh.release();
+}
+
+void MeshGenerator::addPendingGlbData(const std::string& glbIdString, QByteArray data, const std::string& componentIdString)
+{
+    m_pendingGlbData[glbIdString] = { std::move(data), componentIdString };
+}
+
+std::map<std::string, std::pair<dust3d::MeshGenerator::ImportedModelData, dust3d::Uuid>> MeshGenerator::s_glbCache;
+
+void MeshGenerator::parseImportedModelData()
+{
+
+    if (m_pendingGlbData.empty())
+        return;
+
+    std::map<std::string, dust3d::MeshGenerator::ImportedModelData> importedModelData;
+    for (auto& [glbIdString, pending] : m_pendingGlbData) {
+        auto cacheIt = s_glbCache.find(glbIdString);
+        if (cacheIt != s_glbCache.end()) {
+            importedModelData[glbIdString] = cacheIt->second.first;
+            dust3d::Uuid textureId = cacheIt->second.second;
+            if (!textureId.isNull() && !pending.componentIdString.empty()) {
+                auto snapshotCompIt = snapshot()->components.find(pending.componentIdString);
+                if (snapshotCompIt != snapshot()->components.end())
+                    snapshotCompIt->second["colorImageId"] = textureId.toString();
+                emit importedModelTextureReady(dust3d::Uuid(pending.componentIdString), textureId);
+            }
+            continue;
+        }
+        dust3d::MeshGenerator::ImportedModelData modelData;
+        QImage textureImage;
+        if (GlbReader::read(pending.data, modelData, &textureImage)) {
+            dust3d::Uuid textureId;
+            if (!textureImage.isNull()) {
+                textureId = ImageForever::add(&textureImage);
+                if (!textureId.isNull() && !pending.componentIdString.empty()) {
+                    auto snapshotCompIt = snapshot()->components.find(pending.componentIdString);
+                    if (snapshotCompIt != snapshot()->components.end())
+                        snapshotCompIt->second["colorImageId"] = textureId.toString();
+                    emit importedModelTextureReady(dust3d::Uuid(pending.componentIdString), textureId);
+                }
+            }
+            s_glbCache[glbIdString] = { modelData, textureId };
+            importedModelData[glbIdString] = std::move(modelData);
+        }
+    }
+    m_pendingGlbData.clear();
+    if (!importedModelData.empty())
+        setImportedModelData(std::move(importedModelData));
 }
 
 void MeshGenerator::process()
@@ -30,16 +86,25 @@ void MeshGenerator::process()
     QElapsedTimer countTimeConsumed;
     countTimeConsumed.start();
 
+    parseImportedModelData();
     generate();
 
     if (nullptr != m_object)
         m_resultMesh = std::make_unique<ModelMesh>(*m_object);
+
+    m_componentPreviewImages = std::make_unique<std::map<dust3d::Uuid, std::unique_ptr<QImage>>>();
 
     m_componentPreviewMeshes = std::make_unique<std::map<dust3d::Uuid, std::unique_ptr<ModelMesh>>>();
     for (const auto& componentId : m_generatedPreviewComponentIds) {
         auto it = m_generatedComponentPreviews.find(componentId);
         if (it == m_generatedComponentPreviews.end())
             continue;
+        if (!it->second.cutFaceTemplate.empty()) {
+            QImage* previewImage = buildCutFaceTemplatePreviewImage(it->second.cutFaceTemplate);
+            if (nullptr != previewImage)
+                (*m_componentPreviewImages)[componentId].reset(previewImage);
+            continue;
+        }
         std::vector<std::array<dust3d::Vector2, 3>> triangleUvs;
         if (!it->second.triangleUvs.empty()) {
             triangleUvs.resize(it->second.triangles.size());
@@ -69,7 +134,7 @@ void MeshGenerator::process()
         dust3d::smoothNormal(it->second.vertices,
             it->second.triangles,
             previewTriangleNormals,
-            0,
+            nullptr,
             &previewTriangleVertexNormals);
         (*m_componentPreviewMeshes)[componentId] = std::make_unique<ModelMesh>(it->second.vertices,
             it->second.triangles,

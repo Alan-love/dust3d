@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016-2021 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved. 
+ *  Copyright (c) 2016-2026 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved. 
  *
  *  Permission is hereby granted, free of charge, to any person obtaining a copy
  *  of this software and associated documentation files (the "Software"), to deal
@@ -53,6 +53,8 @@ public:
         float roughness = 1.0;
         bool isSuccessful = false;
         bool joined = true;
+        std::map<PositionKey, Color> importedVertexColorMap;
+        std::map<std::array<PositionKey, 3>, std::array<Vector3, 3>> importedTriangleNormals;
         void reset()
         {
             vertices.clear();
@@ -60,6 +62,8 @@ public:
             triangleUvs.clear();
             positionToNodeIdMap.clear();
             nodeMap.clear();
+            importedVertexColorMap.clear();
+            importedTriangleNormals.clear();
             color = Color(1.0, 1.0, 1.0);
             metalness = 0.0;
             roughness = 1.0;
@@ -71,20 +75,24 @@ public:
     struct GeneratedComponent {
         std::unique_ptr<MeshState> mesh;
         std::set<std::pair<PositionKey, PositionKey>> sharedQuadEdges;
-        std::unordered_map<Uuid, std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> partTriangleUvs;
-        std::vector<std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> seamTriangleUvs;
+        std::unordered_map<Uuid, std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>>> componentTriangleUvs;
+        std::set<std::array<PositionKey, 3>> brokenTriangles;
         std::set<PositionKey> noneSeamVertices;
         std::map<PositionKey, Uuid> positionToNodeIdMap;
         std::map<Uuid, ObjectNode> nodeMap;
+        std::map<PositionKey, Color> importedVertexColorMap;
+        std::map<std::array<PositionKey, 3>, std::array<Vector3, 3>> importedTriangleNormals;
         void reset()
         {
             mesh.reset();
             sharedQuadEdges.clear();
-            partTriangleUvs.clear();
-            seamTriangleUvs.clear();
+            componentTriangleUvs.clear();
+            brokenTriangles.clear();
             noneSeamVertices.clear();
             positionToNodeIdMap.clear();
             nodeMap.clear();
+            importedVertexColorMap.clear();
+            importedTriangleNormals.clear();
         }
     };
 
@@ -103,6 +111,15 @@ public:
         float metalness = 0.0;
         float roughness = 1.0;
         std::vector<std::tuple<dust3d::Color, float /*metalness*/, float /*roughness*/>> vertexProperties;
+        std::vector<Vector2> cutFaceTemplate;
+    };
+
+    struct ImportedModelData {
+        std::vector<Vector3> vertices;
+        std::vector<Vector3> vertexNormals;
+        std::vector<std::vector<size_t>> faces;
+        std::map<std::array<PositionKey, 3>, std::array<Vector2, 3>> triangleUvs;
+        std::vector<Color> vertexColors;
     };
 
     MeshGenerator(Snapshot* snapshot);
@@ -111,15 +128,17 @@ public:
     const std::set<Uuid>& generatedPreviewComponentIds();
     const std::map<Uuid, ComponentPreview>& generatedComponentPreviews();
     Object* takeObject();
+    Snapshot* takeSnapshot();
     virtual void generate();
     void setGeneratedCacheContext(GeneratedCacheContext* cacheContext);
     void setSmoothShadingThresholdAngleDegrees(float degrees);
     void setDefaultPartColor(const Color& color);
     void setId(uint64_t id);
-    void setWeldEnabled(bool enabled);
     uint64_t id();
+    void setImportedModelData(std::map<std::string, ImportedModelData>&& importedModelData);
 
 protected:
+    Snapshot* snapshot() { return m_snapshot; }
     std::set<Uuid> m_generatedPreviewComponentIds;
     std::map<Uuid, ComponentPreview> m_generatedComponentPreviews;
     Object* m_object = nullptr;
@@ -139,42 +158,70 @@ private:
     bool m_cacheEnabled = false;
     float m_smoothShadingThresholdAngleDegrees = 60;
     uint64_t m_id = 0;
-    bool m_weldEnabled = true;
+    std::map<std::string, ImportedModelData> m_importedModelData;
 
     void collectParts();
-    void collectIncombinableMesh(const MeshState* mesh, const GeneratedComponent& componentCache);
+    void interpolateEdgesAroundJoints();
+    void collectIncombinableMesh(const MeshState* mesh, const GeneratedComponent& componentCache, const Uuid& componentId = Uuid());
     bool checkIsComponentDirty(const std::string& componentIdString);
     bool checkIsPartDirty(const std::string& partIdString);
     bool checkIsPartDependencyDirty(const std::string& partIdString);
     void checkDirtyFlags();
     std::unique_ptr<MeshState> combinePartMesh(const std::string& partIdString,
         const std::string& componentIdString,
+        Color color,
+        float smoothCutoffDegrees,
         bool* hasError);
     std::unique_ptr<MeshState> combineComponentMesh(const std::string& componentIdString, CombineMode* combineMode);
-    void makeXmirror(const std::vector<Vector3>& sourceVertices, const std::vector<std::vector<size_t>>& sourceFaces,
-        std::vector<Vector3>* destVertices, std::vector<std::vector<size_t>>* destFaces);
     void collectSharedQuadEdges(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& faces,
         std::set<std::pair<PositionKey, PositionKey>>* sharedQuadEdges);
     const std::map<std::string, std::string>* findComponent(const std::string& componentIdString);
     CombineMode componentCombineMode(const std::map<std::string, std::string>* component);
     std::unique_ptr<MeshState> combineComponentChildGroupMesh(const std::vector<std::string>& componentIdStrings,
-        GeneratedComponent& componentCache);
-    std::unique_ptr<MeshState> combineMultipleMeshes(std::vector<std::tuple<std::unique_ptr<MeshState>, CombineMode, std::string>>&& multipleMeshes);
-    std::unique_ptr<MeshState> combineStitchingMesh(const std::vector<std::string>& partIdStrings,
+        GeneratedComponent& componentCache,
+        std::set<std::array<PositionKey, 3>>* brokenTriangles);
+    std::unique_ptr<MeshState> combineMultipleMeshes(std::vector<std::tuple<std::unique_ptr<MeshState>, CombineMode, std::string>>&& multipleMeshes,
+        std::set<std::array<PositionKey, 3>>* brokenTriangles);
+    std::unique_ptr<MeshState> combineStitchingMesh(const std::string& componentIdString,
+        const std::vector<std::string>& partIdStrings,
         const std::vector<std::string>& componentIdStrings,
+        bool frontClosed,
+        bool backClosed,
+        bool sideClosed,
+        size_t targetSegments,
+        Color color,
+        float smoothCutoffDegrees,
+        GeneratedComponent& componentCache);
+    std::unique_ptr<MeshState> combineStitchingLoopMesh(const std::string& componentIdString,
+        const std::vector<std::string>& partIdStrings,
+        const std::vector<std::string>& componentIdStrings,
+        bool backClosed,
+        float backCloseDepthRatio,
+        float backCloseSharpness,
+        size_t targetSegments,
+        Color color,
+        float smoothCutoffDegrees,
         GeneratedComponent& componentCache);
     void collectUncombinedComponent(const std::string& componentIdString);
+    void collectBrokenTriangles(const std::string& componentIdString);
     void cutFaceStringToCutTemplate(const std::string& cutFaceString, std::vector<Vector2>& cutTemplate);
     void postprocessObject(Object* object);
     void preprocessMirror();
     std::string reverseUuid(const std::string& uuidString);
+    static bool seamReportEnabled();
+    std::string componentDisplayName(const std::string& componentIdString);
+    std::string seamReportNames(const std::string& subMeshIdString);
+    bool isHardComponent(const std::string& componentIdString, int depth = 0);
+    void reportFailedCombine(const std::string& subMeshIdString, const std::string& method);
+    void reportSeams(const std::string& subMeshIdString, const std::string& method,
+        const std::vector<MeshRecombiner::SeamReport>& reports);
     void recoverQuads(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles, const std::set<std::pair<PositionKey, PositionKey>>& sharedQuadEdges, std::vector<std::vector<size_t>>& triangleAndQuads);
     void addComponentPreview(const Uuid& componentId, ComponentPreview&& preview);
-    bool fetchPartOrderedNodes(const std::string& partIdString, std::vector<MeshNode>* meshNodes, bool* isCircle);
+    bool fetchPartOrderedNodes(const std::string& partIdString, bool xMirrored, std::vector<MeshNode>* meshNodes, bool* isCircle);
 
     static void chamferFace(std::vector<Vector2>* face);
     static void subdivideFace(std::vector<Vector2>* face);
-    static void flattenLinks(const std::unordered_map<size_t, size_t>& links,
+    static void flattenLinks(const std::map<size_t, size_t>& links,
         std::vector<size_t>* array,
         bool* isCircle);
 };

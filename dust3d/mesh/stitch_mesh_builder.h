@@ -33,43 +33,37 @@ class StitchMeshBuilder {
 public:
     struct Spline {
         std::vector<MeshNode> nodes;
-        bool isCircle = false;
-        bool isClosing = false;
         Uuid sourceId;
     };
 
-    StitchMeshBuilder(std::vector<Spline>&& splines);
+    StitchMeshBuilder(std::vector<Spline>&& splines, bool frontClosed, bool backClosed, bool sideClosed, size_t targetSegments);
     void build();
     const std::vector<Vector3>& generatedVertices() const;
+    const std::vector<Uuid>& generatedVertexSources() const;
     const std::vector<std::vector<size_t>>& generatedFaces() const;
+    const std::vector<std::vector<Vector2>>& generatedFaceUvs() const;
     const std::vector<Spline>& splines() const;
 
 private:
-    struct StitchingPoint {
-        size_t originVertex;
-        double radius;
-    };
-
     std::vector<Spline> m_splines;
-    std::vector<StitchingPoint> m_generatedStitchingPoints;
     std::vector<Vector3> m_generatedVertices;
+    std::vector<Uuid> m_generatedVertexSources;
     std::vector<std::vector<size_t>> m_generatedFaces;
-    std::vector<Vector3> m_generatedNormals;
+    std::vector<std::vector<Vector2>> m_generatedFaceUvs;
     size_t m_targetSegments = 0;
+    bool m_sideClosed = false;
+    bool m_frontClosed = false;
+    bool m_backClosed = false;
 
-    void interpolateSplinesToHaveEqualSizeOfNodesExceptClosingSplines();
-    std::vector<std::vector<StitchingPoint>> convertSplinesToStitchingPoints(const std::vector<Spline>& splines);
-    void generateMeshFromStitchingPoints(const std::vector<std::vector<StitchingPoint>>& stitchingPoints);
-    void generateMeshFromStitchingPoints(const std::vector<StitchingPoint>& a,
-        const std::vector<StitchingPoint>& b);
+    bool interpolateSplinesToHaveEqualSizeOfNodes();
     void splitPolylineToSegments(const std::vector<Vector3>& polyline,
         const std::vector<double>& radiuses,
+        const std::vector<Uuid>& sourceIds,
         size_t targetSegments,
         std::vector<Vector3>* targetPoints,
-        std::vector<double>* targetRadiuses);
+        std::vector<double>* targetRadiuses,
+        std::vector<Uuid>* targetSourceIds);
     double segmentsLength(const std::vector<Vector3>& segmentPoints);
-    void interpolateSplinesForBackClosing();
-    void addQuadButMaybeTriangle(const std::vector<size_t>& quadButMaybeTriangle);
 };
 
 }

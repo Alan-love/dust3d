@@ -1,53 +1,78 @@
 #include "document_window.h"
 #include "about_widget.h"
+#include "animation_manage_widget.h"
 #include "bone_manage_widget.h"
 #include "cut_face_preview.h"
 #include "document.h"
 #include "document_saver.h"
+#include "export_animation_worker.h"
+#include "export_progress_widget.h"
 #include "fbx_file.h"
 #include "float_number_widget.h"
 #include "flow_layout.h"
 #include "glb_file.h"
+#include "glb_forever.h"
 #include "horizontal_line_widget.h"
 #include "image_forever.h"
 #include "log_browser.h"
 #include "part_manage_widget.h"
 #include "preferences.h"
+#include "preview_overlay_controller.h"
 #include "skeleton_graphics_widget.h"
 #include "spinnable_toolbar_icon.h"
+#include "steps_replay_window.h"
 #include "theme.h"
-#include "updates_check_widget.h"
+#include "turnaround_image_editor_dialog.h"
+#include "turnaround_overlay_widget.h"
 #include "uv_map_generator.h"
 #include "version.h"
+#include "world_widget.h"
+#include <QAbstractSpinBox>
 #include <QApplication>
+#include <QChildEvent>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QDir>
 #include <QDockWidget>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QRandomGenerator>
+#include <QScrollArea>
+#include <QTabBar>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QTextBrowser>
+#include <QTextEdit>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QtCore/qbuffer.h>
+#include <dust3d/animation/animation_generator.h>
+#include <dust3d/animation/sound_event_detector.h>
+#include <dust3d/animation/sound_generator.h>
 #include <dust3d/base/debug.h>
 #include <dust3d/base/ds3_file.h>
 #include <dust3d/base/snapshot.h>
 #include <dust3d/base/snapshot_xml.h>
 #include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 LogBrowser* g_logBrowser = nullptr;
 std::map<DocumentWindow*, dust3d::Uuid> g_documentWindows;
@@ -55,7 +80,8 @@ QTextBrowser* g_acknowlegementsWidget = nullptr;
 AboutWidget* g_aboutWidget = nullptr;
 QTextBrowser* g_contributorsWidget = nullptr;
 QTextBrowser* g_supportersWidget = nullptr;
-UpdatesCheckWidget* g_updatesCheckWidget = nullptr;
+
+// Intentionally left blank. The overlay does not accept drops so the canvas can receive them directly.
 
 void outputMessage(QtMsgType type, const QMessageLogContext& context, const QString& msg)
 {
@@ -63,11 +89,21 @@ void outputMessage(QtMsgType type, const QMessageLogContext& context, const QStr
         g_logBrowser->outputMessage(type, msg, context.file, context.line);
 }
 
-void ensureFileExtension(QString* filename, const QString extension)
+void DocumentWindow::ensureFileExtension(QString* filename, const QString& extension)
 {
     if (!filename->endsWith(extension)) {
         filename->append(extension);
     }
+}
+
+QString DocumentWindow::exportedFilename(const QString& filename, const QString& extension)
+{
+    QString finalName = filename;
+    if (!finalName.endsWith(extension))
+        finalName += extension;
+    if (finalName == extension)
+        finalName = "Untitled" + finalName;
+    return finalName;
 }
 
 const std::map<DocumentWindow*, dust3d::Uuid>& DocumentWindow::documentWindows()
@@ -138,17 +174,6 @@ void DocumentWindow::showAbout()
     g_aboutWidget->raise();
 }
 
-void DocumentWindow::checkForUpdates()
-{
-    if (!g_updatesCheckWidget) {
-        g_updatesCheckWidget = new UpdatesCheckWidget;
-    }
-    g_updatesCheckWidget->check();
-    g_updatesCheckWidget->show();
-    g_updatesCheckWidget->activateWindow();
-    g_updatesCheckWidget->raise();
-}
-
 size_t DocumentWindow::total()
 {
     return g_documentWindows.size();
@@ -156,12 +181,18 @@ size_t DocumentWindow::total()
 
 DocumentWindow::DocumentWindow()
 {
+#if defined(Q_OS_WASM)
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+#endif
+
     if (!g_logBrowser) {
         g_logBrowser = new LogBrowser;
         qInstallMessageHandler(&outputMessage);
     }
 
     g_documentWindows.insert({ this, dust3d::Uuid::createUuid() });
+
+    setAcceptDrops(true);
 
     m_document = new Document;
 
@@ -172,22 +203,22 @@ DocumentWindow::DocumentWindow()
     toolButtonLayout->setSpacing(0);
     toolButtonLayout->setContentsMargins(5, 10, 4, 0);
 
-    ToolbarButton* addButton = new ToolbarButton(":/resources/toolbar_add.svg");
-    addButton->setToolTip(tr("Add node to canvas"));
+    ToolbarButton* addButton = new ToolbarButton(":/resources/toolbar_add_red.svg");
+    addButton->setToolTip(tr("Add node to canvas (A)\nRight-click to toggle main/side profile"));
 
     ToolbarButton* selectButton = new ToolbarButton(":/resources/toolbar_pointer.svg");
-    selectButton->setToolTip(tr("Select node on canvas"));
+    selectButton->setToolTip(tr("Select node on canvas (S)"));
 
     m_xLockButton = new ToolbarButton();
-    m_xLockButton->setToolTip(tr("X axis locker"));
+    m_xLockButton->setToolTip(tr("X axis locker (X)"));
     updateXlockButtonState();
 
     m_yLockButton = new ToolbarButton();
-    m_yLockButton->setToolTip(tr("Y axis locker"));
+    m_yLockButton->setToolTip(tr("Y axis locker (Y)"));
     updateYlockButtonState();
 
     m_zLockButton = new ToolbarButton();
-    m_zLockButton->setToolTip(tr("Z axis locker"));
+    m_zLockButton->setToolTip(tr("Z axis locker (Z)"));
     updateZlockButtonState();
 
     m_radiusLockButton = new ToolbarButton();
@@ -198,18 +229,16 @@ DocumentWindow::DocumentWindow()
     updateInprogressIndicator();
 
     connect(m_document, &Document::meshGenerating, this, &DocumentWindow::updateInprogressIndicator);
+    connect(m_document, &Document::rigGenerating, this, &DocumentWindow::updateInprogressIndicator);
     connect(m_document, &Document::resultMeshChanged, this, [=]() {
         m_isLastMeshGenerationSucceed = m_document->isMeshGenerationSucceed();
         updateInprogressIndicator();
     });
-    connect(m_document, &Document::resultBodyBonePreviewMeshChanged, this, &DocumentWindow::updateInprogressIndicator);
+    connect(m_document, &Document::resultRigChanged, this, &DocumentWindow::updateInprogressIndicator);
     connect(m_document, &Document::resultComponentPreviewMeshesChanged, this, &DocumentWindow::generateComponentPreviewImages);
     connect(m_document, &Document::textureChanged, this, &DocumentWindow::generateComponentPreviewImages);
     connect(m_document, &Document::textureGenerating, this, &DocumentWindow::updateInprogressIndicator);
     connect(m_document, &Document::resultTextureChanged, this, &DocumentWindow::updateInprogressIndicator);
-    connect(m_document, &Document::boneGenerating, this, &DocumentWindow::updateInprogressIndicator);
-    connect(m_document, &Document::resultBoneChanged, this, &DocumentWindow::updateInprogressIndicator);
-    connect(m_document, &Document::resultBonePreviewMeshesChanged, this, &DocumentWindow::generateBonePreviewImages);
 
     toolButtonLayout->addWidget(addButton);
     toolButtonLayout->addWidget(selectButton);
@@ -242,12 +271,36 @@ DocumentWindow::DocumentWindow()
     containerWidget->setGraphicsWidget(canvasGraphicsWidget);
     QGridLayout* containerLayout = new QGridLayout;
     containerLayout->setSpacing(0);
-    containerLayout->setContentsMargins(1, 0, 0, 0);
+    containerLayout->setContentsMargins(1, 1, 1, 1);
     containerLayout->addWidget(canvasGraphicsWidget);
     containerWidget->setLayout(containerLayout);
-    containerWidget->setMinimumSize(400, 400);
+    containerWidget->setMinimumSize(200, 200);
 
     m_graphicsContainerWidget = containerWidget;
+
+    m_turnaroundShortcutsOverlay = new TurnaroundOverlayWidget(this, this);
+    m_turnaroundShortcutsOverlay->setVisible(false);
+
+    auto repositionOverlay = [=]() {
+        if (nullptr == m_turnaroundShortcutsOverlay)
+            return;
+        const QSize size = this->size();
+        const int width = qBound(420, int(size.width() * 0.42), qMin(560, size.width() - 80));
+        m_turnaroundShortcutsOverlay->setFixedWidth(width);
+        m_turnaroundShortcutsOverlay->setMinimumHeight(340);
+        m_turnaroundShortcutsOverlay->adjustSize();
+        const int x = qMax(0, (size.width() - m_turnaroundShortcutsOverlay->width()) / 2);
+        const int y = qMax(0, (size.height() - m_turnaroundShortcutsOverlay->height()) / 2);
+        m_turnaroundShortcutsOverlay->move(x, y);
+        m_turnaroundShortcutsOverlay->raise();
+    };
+
+    connect(containerWidget, &GraphicsContainerWidget::containerSizeChanged,
+        [=](QSize) {
+            repositionOverlay();
+        });
+
+    repositionOverlay();
 
     m_modelRenderWidget = new ModelWidget(containerWidget);
     m_modelRenderWidget->setMoveAndZoomByWindow(false);
@@ -272,19 +325,34 @@ DocumentWindow::DocumentWindow()
     partsDocker->setWidget(m_partManageWidget);
     addDockWidget(Qt::RightDockWidgetArea, partsDocker);
 
-    QDockWidget* bonesDocker = new QDockWidget(tr("Bones"), this);
+    m_bonesDocker = new QDockWidget(tr("Bones"), this);
+    m_bonesDocker->setAllowedAreas(Qt::RightDockWidgetArea);
     m_boneManageWidget = new BoneManageWidget(m_document);
-    bonesDocker->setWidget(m_boneManageWidget);
-    bonesDocker->setAllowedAreas(Qt::RightDockWidgetArea);
+    m_boneManageWidget->setSkeletonGraphicsWidget(m_canvasGraphicsWidget);
+    m_bonesDocker->setWidget(m_boneManageWidget);
+    addDockWidget(Qt::RightDockWidgetArea, m_bonesDocker);
 
-    connect(bonesDocker, &QDockWidget::visibilityChanged, this, [this](bool visible) {
-        if (this->m_showBodyBonePreview == visible)
-            return;
-        this->m_showBodyBonePreview = visible;
-        forceUpdateRenderModel();
-    });
+    m_animationsDocker = new QDockWidget(tr("Animations"), this);
+    m_animationsDocker->setAllowedAreas(Qt::RightDockWidgetArea);
+    m_animationManageWidget = new AnimationManageWidget(m_document);
+    m_animationsDocker->setWidget(m_animationManageWidget);
+    addDockWidget(Qt::RightDockWidgetArea, m_animationsDocker);
 
-    tabifyDockWidget(partsDocker, bonesDocker);
+    tabifyDockWidget(partsDocker, m_bonesDocker);
+    tabifyDockWidget(m_bonesDocker, m_animationsDocker);
+
+    // Re-raise the overlay whenever a dock tab changes, because Qt raises the
+    // newly-active dock widget and would otherwise cover the overlay.
+    for (QTabBar* tabBar : findChildren<QTabBar*>()) {
+        connect(tabBar, &QTabBar::currentChanged, this, [=](int) {
+            if (m_turnaroundShortcutsOverlay && m_turnaroundShortcutsOverlay->isVisible())
+                m_turnaroundShortcutsOverlay->raise();
+        });
+    }
+
+    // Connect bone selection changes to animation widget for bone weight visualization
+    connect(m_boneManageWidget, &BoneManageWidget::boneSelectionChanged,
+        m_animationManageWidget, &AnimationManageWidget::onSelectedBoneChanged);
 
     partsDocker->raise();
 
@@ -302,10 +370,14 @@ DocumentWindow::DocumentWindow()
     canvasLayout->addWidget(containerWidget);
     canvasLayout->setStretch(1, 1);
 
+    QWidget* leftToolPanel = new QWidget;
+    leftToolPanel->setLayout(mainLeftLayout);
+    m_leftToolPanel = leftToolPanel;
+
     QHBoxLayout* mainLayout = new QHBoxLayout;
     mainLayout->setSpacing(0);
     mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->addLayout(mainLeftLayout);
+    mainLayout->addWidget(leftToolPanel);
     mainLayout->addLayout(canvasLayout);
     mainLayout->addSpacing(3);
 
@@ -317,43 +389,20 @@ DocumentWindow::DocumentWindow()
 
     m_fileMenu = menuBar()->addMenu(tr("&File"));
 
-    m_newWindowAction = new QAction(tr("New Window"), this);
-    connect(m_newWindowAction, &QAction::triggered, this, &DocumentWindow::newWindow, Qt::QueuedConnection);
-    m_fileMenu->addAction(m_newWindowAction);
-
-    m_newDocumentAction = m_fileMenu->addAction(tr("&New"),
-        this, &DocumentWindow::newDocument,
+    m_newDocumentAction = m_fileMenu->addAction(tr("&New Window"),
+        this, &DocumentWindow::newWindow,
         QKeySequence::New);
 
     m_openAction = m_fileMenu->addAction(tr("&Open..."),
         this, &DocumentWindow::open,
         QKeySequence::Open);
 
-    m_openExampleMenu = new QMenu(tr("Open Example"));
-    std::vector<QString> exampleModels = {
-        "Addax",
-        "Banana",
-        "Bicycle",
-        "Dog",
-        "Meerkat",
-        "Mosquito",
-        "Screwdriver",
-        "Seagull"
-    };
-    for (const auto& model : exampleModels) {
-        QAction* openModelAction = new QAction(model, this);
-        connect(openModelAction, &QAction::triggered, this, [this, model]() {
-            openExample("model-" + model.toLower().replace(QChar(' '), QChar('-')) + ".ds3");
-        });
-        m_openExampleMenu->addAction(openModelAction);
-    }
-
-    m_fileMenu->addMenu(m_openExampleMenu);
-
     m_saveAction = m_fileMenu->addAction(tr("&Save"),
         this, &DocumentWindow::save,
         QKeySequence::Save);
 
+#if defined(Q_OS_WASM)
+#else
     m_saveAsAction = new QAction(tr("Save As..."), this);
     connect(m_saveAsAction, &QAction::triggered, this, &DocumentWindow::saveAs, Qt::QueuedConnection);
     m_fileMenu->addAction(m_saveAsAction);
@@ -361,6 +410,7 @@ DocumentWindow::DocumentWindow()
     m_saveAllAction = new QAction(tr("Save All"), this);
     connect(m_saveAllAction, &QAction::triggered, this, &DocumentWindow::saveAll, Qt::QueuedConnection);
     m_fileMenu->addAction(m_saveAllAction);
+#endif
 
     m_fileMenu->addSeparator();
 
@@ -372,18 +422,40 @@ DocumentWindow::DocumentWindow()
     connect(m_exportAsGlbAction, &QAction::triggered, this, &DocumentWindow::exportGlbResult, Qt::QueuedConnection);
     m_fileMenu->addAction(m_exportAsGlbAction);
 
+#if defined(Q_OS_WASM)
+#else
     m_exportAsFbxAction = new QAction(tr("Export as FBX..."), this);
     connect(m_exportAsFbxAction, &QAction::triggered, this, &DocumentWindow::exportFbxResult, Qt::QueuedConnection);
     m_fileMenu->addAction(m_exportAsFbxAction);
+#endif
 
     m_fileMenu->addSeparator();
 
-    m_changeTurnaroundAction = new QAction(tr("Change Reference Sheet..."), this);
+    m_exportAsGlbAndWavsAction = new QAction(tr("Export as GLB and WAVs..."), this);
+    connect(m_exportAsGlbAndWavsAction, &QAction::triggered, this, &DocumentWindow::exportGlbAndWavsResult, Qt::QueuedConnection);
+    m_fileMenu->addAction(m_exportAsGlbAndWavsAction);
+
+#if defined(Q_OS_WASM)
+#else
+    m_exportAsFbxAndWavsAction = new QAction(tr("Export as FBX and WAVs..."), this);
+    connect(m_exportAsFbxAndWavsAction, &QAction::triggered, this, &DocumentWindow::exportFbxAndWavsResult, Qt::QueuedConnection);
+    m_fileMenu->addAction(m_exportAsFbxAndWavsAction);
+#endif
+
+    m_fileMenu->addSeparator();
+
+    m_changeTurnaroundAction = new QAction(tr("Change Background Image..."), this);
     connect(m_changeTurnaroundAction, &QAction::triggered, this, &DocumentWindow::changeTurnaround, Qt::QueuedConnection);
     m_fileMenu->addAction(m_changeTurnaroundAction);
 
+    m_eraseTurnaroundAction = new QAction(tr("Erase Background Image"), this);
+    connect(m_eraseTurnaroundAction, &QAction::triggered, this, &DocumentWindow::eraseTurnaround, Qt::QueuedConnection);
+    m_fileMenu->addAction(m_eraseTurnaroundAction);
+
     m_fileMenu->addSeparator();
 
+#if defined(Q_OS_WASM)
+#else
     for (int i = 0; i < Preferences::instance().maxRecentFiles(); ++i) {
         QAction* action = new QAction(this);
         action->setVisible(false);
@@ -391,6 +463,12 @@ DocumentWindow::DocumentWindow()
         m_recentFileActions.push_back(action);
         m_fileMenu->addAction(action);
     }
+    m_clearRecentFilesAction = new QAction(tr("Clear Recent Files"), this);
+    connect(m_clearRecentFilesAction, &QAction::triggered, this, [=]() {
+        Preferences::instance().clearRecentFileList();
+        updateRecentFileActions();
+    });
+    m_fileMenu->addAction(m_clearRecentFilesAction);
     m_recentFileSeparatorAction = m_fileMenu->addSeparator();
     m_recentFileSeparatorAction->setVisible(false);
     updateRecentFileActions();
@@ -398,6 +476,7 @@ DocumentWindow::DocumentWindow()
     m_quitAction = m_fileMenu->addAction(tr("&Quit"),
         this, &DocumentWindow::close,
         QKeySequence::Quit);
+#endif
 
     connect(m_fileMenu, &QMenu::aboutToShow, [=]() {
         m_exportAsObjAction->setEnabled(m_canvasGraphicsWidget->hasItems());
@@ -405,15 +484,81 @@ DocumentWindow::DocumentWindow()
         m_exportAsFbxAction->setEnabled(m_canvasGraphicsWidget->hasItems() && m_document->isExportReady());
     });
 
+    m_editMenu = menuBar()->addMenu(tr("&Edit"));
+
+    m_undoAction = new QAction(tr("&Undo"), this);
+    m_undoAction->setShortcut(QKeySequence::Undo);
+    m_undoAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_undoAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutUndo);
+    m_editMenu->addAction(m_undoAction);
+
+    m_redoAction = new QAction(tr("&Redo"), this);
+    m_redoAction->setShortcuts({ QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y) });
+    m_redoAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_redoAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutRedo);
+    m_editMenu->addAction(m_redoAction);
+
+    m_editMenu->addSeparator();
+
+    m_cutAction = new QAction(tr("Cu&t"), this);
+    m_cutAction->setShortcut(QKeySequence::Cut);
+    m_cutAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_cutAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutCut);
+    m_editMenu->addAction(m_cutAction);
+
+    m_copyAction = new QAction(tr("&Copy"), this);
+    m_copyAction->setShortcut(QKeySequence::Copy);
+    m_copyAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_copyAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutCopy);
+    m_editMenu->addAction(m_copyAction);
+
+    m_pasteAction = new QAction(tr("&Paste"), this);
+    m_pasteAction->setShortcut(QKeySequence::Paste);
+    m_pasteAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_pasteAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutPaste);
+    m_editMenu->addAction(m_pasteAction);
+
+    m_deleteAction = new QAction(tr("&Delete"), this);
+    m_deleteAction->setShortcut(QKeySequence::Delete);
+    m_deleteAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_deleteAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutDelete);
+    m_editMenu->addAction(m_deleteAction);
+
+    m_editMenu->addSeparator();
+
+    m_selectAllAction = new QAction(tr("Select &All"), this);
+    m_selectAllAction->setShortcut(QKeySequence::SelectAll);
+    m_selectAllAction->setShortcutContext(Qt::WidgetShortcut); // shortcut handled by QShortcut below
+    connect(m_selectAllAction, &QAction::triggered, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutSelectAll);
+    m_editMenu->addAction(m_selectAllAction);
+
+    // The QAction shortcuts above are set to WidgetShortcut so the action's
+    // enabled state does not gate the key binding.  Always-active QShortcut
+    // objects are registered in initializeShortcuts() to own the actual
+    // keyboard handling for the Edit menu commands.
+
+    connect(m_editMenu, &QMenu::aboutToShow, [=]() {
+        m_undoAction->setEnabled(m_document->undoable());
+        m_redoAction->setEnabled(m_document->redoable());
+        m_cutAction->setEnabled(m_canvasGraphicsWidget->hasSelection());
+        m_copyAction->setEnabled(m_canvasGraphicsWidget->hasNodeSelection());
+        m_pasteAction->setEnabled(m_document->hasPastableNodesInClipboard());
+        m_deleteAction->setEnabled(m_canvasGraphicsWidget->hasSelection());
+        m_selectAllAction->setEnabled(m_canvasGraphicsWidget->hasItems());
+    });
+
     m_viewMenu = menuBar()->addMenu(tr("&View"));
 
     m_toggleWireframeAction = new QAction(tr("Toggle Wireframe"), this);
+    m_toggleWireframeAction->setShortcut(Qt::Key_W);
     connect(m_toggleWireframeAction, &QAction::triggered, [=]() {
         m_modelRenderWidget->toggleWireframe();
+        m_boneManageWidget->setWireframeVisible(m_modelRenderWidget->isWireframeVisible());
     });
     m_viewMenu->addAction(m_toggleWireframeAction);
 
     m_toggleRotationAction = new QAction(tr("Toggle Rotation"), this);
+    m_toggleRotationAction->setShortcut(Qt::Key_R);
     connect(m_toggleRotationAction, &QAction::triggered, [=]() {
         m_modelRenderWidget->toggleRotation();
     });
@@ -434,10 +579,17 @@ DocumentWindow::DocumentWindow()
 
     m_showBonesListAction = new QAction(tr("Bones"), this);
     connect(m_showBonesListAction, &QAction::triggered, [=]() {
-        bonesDocker->show();
-        bonesDocker->raise();
+        m_bonesDocker->show();
+        m_bonesDocker->raise();
     });
     m_windowMenu->addAction(m_showBonesListAction);
+
+    m_showAnimationsListAction = new QAction(tr("Animations"), this);
+    connect(m_showAnimationsListAction, &QAction::triggered, [=]() {
+        m_animationsDocker->show();
+        m_animationsDocker->raise();
+    });
+    m_windowMenu->addAction(m_showAnimationsListAction);
 
     QMenu* dialogsMenu = m_windowMenu->addMenu(tr("Dialogs"));
     connect(dialogsMenu, &QMenu::aboutToShow, [=]() {
@@ -460,27 +612,22 @@ DocumentWindow::DocumentWindow()
     connect(m_showDebugDialogAction, &QAction::triggered, g_logBrowser, &LogBrowser::showDialog);
     m_windowMenu->addAction(m_showDebugDialogAction);
 
+    m_windowMenu->addSeparator();
+
+    m_workflowReplayAction = new QAction(tr("Replay Steps"), this);
+    m_workflowReplayAction->setEnabled(false);
+    connect(m_workflowReplayAction, &QAction::triggered, this, [=]() {
+        StepsReplayWindow* demoFlow = new StepsReplayWindow(m_document, this);
+        demoFlow->setAttribute(Qt::WA_DeleteOnClose);
+        demoFlow->show();
+    });
+    m_windowMenu->addAction(m_workflowReplayAction);
+
     m_helpMenu = menuBar()->addMenu(tr("&Help"));
 
     m_gotoHomepageAction = new QAction(tr("Dust3D Homepage"), this);
     connect(m_gotoHomepageAction, &QAction::triggered, this, &DocumentWindow::gotoHomepage);
     m_helpMenu->addAction(m_gotoHomepageAction);
-
-    m_viewSourceAction = new QAction(tr("Source Code"), this);
-    connect(m_viewSourceAction, &QAction::triggered, this, &DocumentWindow::viewSource);
-    m_helpMenu->addAction(m_viewSourceAction);
-
-    m_checkForUpdatesAction = new QAction(tr("Check for Updates..."), this);
-    connect(m_checkForUpdatesAction, &QAction::triggered, this, &DocumentWindow::checkForUpdates);
-    m_helpMenu->addAction(m_checkForUpdatesAction);
-
-    m_helpMenu->addSeparator();
-
-    m_seeReferenceGuideAction = new QAction(tr("Reference Guide"), this);
-    connect(m_seeReferenceGuideAction, &QAction::triggered, this, &DocumentWindow::seeReferenceGuide);
-    m_helpMenu->addAction(m_seeReferenceGuideAction);
-
-    m_helpMenu->addSeparator();
 
     m_aboutAction = new QAction(tr("About"), this);
     connect(m_aboutAction, &QAction::triggered, this, &DocumentWindow::about);
@@ -489,6 +636,12 @@ DocumentWindow::DocumentWindow()
     m_reportIssuesAction = new QAction(tr("Report Issues"), this);
     connect(m_reportIssuesAction, &QAction::triggered, this, &DocumentWindow::reportIssues);
     m_helpMenu->addAction(m_reportIssuesAction);
+
+    QAction* donateHelpAction = new QAction(tr("Donate"), this);
+    connect(donateHelpAction, &QAction::triggered, this, [=]() {
+        QDesktopServices::openUrl(QUrl("https://fund.dust3d.org"));
+    });
+    m_helpMenu->addAction(donateHelpAction);
 
     m_helpMenu->addSeparator();
 
@@ -504,14 +657,41 @@ DocumentWindow::DocumentWindow()
     connect(m_seeAcknowlegementsAction, &QAction::triggered, this, &DocumentWindow::seeAcknowlegements);
     m_helpMenu->addAction(m_seeAcknowlegementsAction);
 
+    m_helpMenu->addSeparator();
+
+    m_keyboardShortcutsAction = new QAction(tr("Keyboard Shortcuts..."), this);
+    connect(m_keyboardShortcutsAction, &QAction::triggered, this, &DocumentWindow::showKeyboardShortcuts);
+    m_helpMenu->addAction(m_keyboardShortcutsAction);
+
     connect(containerWidget, &GraphicsContainerWidget::containerSizeChanged,
         canvasGraphicsWidget, &SkeletonGraphicsWidget::canvasResized);
 
     connect(m_document, &Document::turnaroundChanged,
         canvasGraphicsWidget, &SkeletonGraphicsWidget::turnaroundChanged);
+    connect(m_document, &Document::turnaroundChanged,
+        this, &DocumentWindow::updateTurnaroundShortcutsOverlay);
+    connect(m_document, &Document::skeletonChanged,
+        this, &DocumentWindow::updateTurnaroundShortcutsOverlay);
+    updateTurnaroundShortcutsOverlay();
 
     connect(addButton, &QPushButton::clicked, [=]() {
         m_document->setEditMode(Document::EditMode::Add);
+    });
+
+    addButton->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(addButton, &QPushButton::customContextMenuRequested, [=]() {
+        if (m_document->nodeAddProfile == Document::Profile::Main) {
+            m_document->setNodeAddProfile(Document::Profile::Side);
+        } else {
+            m_document->setNodeAddProfile(Document::Profile::Main);
+        }
+    });
+
+    connect(m_document, &Document::nodeAddProfileChanged, [=](Document::Profile profile) {
+        if (profile == Document::Profile::Main)
+            addButton->setIcon(":/resources/toolbar_add_red.svg");
+        else
+            addButton->setIcon(":/resources/toolbar_add_green.svg");
     });
 
     connect(selectButton, &QPushButton::clicked, [=]() {
@@ -543,20 +723,20 @@ DocumentWindow::DocumentWindow()
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutToggleWireframe, [=]() {
         m_modelRenderWidget->toggleWireframe();
+        m_boneManageWidget->setWireframeVisible(m_modelRenderWidget->isWireframeVisible());
     });
 
     //connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutToggleFlatShading, [=]() {
     //    Preferences::instance().setFlatShading(!Preferences::instance().flatShading());
     //});
 
-    //connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutToggleRotation, this, &DocumentWindow::toggleRotation);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutToggleRotation, this, &DocumentWindow::toggleRotation);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::zoomRenderedModelBy, m_modelRenderWidget, &ModelWidget::zoom);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::addNode, m_document, &Document::addNode);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::scaleNodeByAddRadius, m_document, &Document::scaleNodeByAddRadius);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::moveNodeBy, m_document, &Document::moveNodeBy);
-    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setNodeBoneJointState, m_document, &Document::setNodeBoneJointState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setNodeOrigin, m_document, &Document::setNodeOrigin);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::removeNode, m_document, &Document::removeNode);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::removePart, m_document, &Document::removePart);
@@ -581,16 +761,16 @@ DocumentWindow::DocumentWindow()
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartVisibleState, m_document, &Document::setPartVisibleState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartSubdivState, m_document, &Document::setPartSubdivState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartChamferState, m_document, &Document::setPartChamferState);
-    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartColorState, m_document, &Document::setPartColorState);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartColorState, m_document, [this](const dust3d::Uuid& partId, bool hasColor, QColor color) {
+        const Document::Part* part = this->m_document->findPart(partId);
+        if (nullptr == part)
+            return;
+        this->m_document->setComponentColorState(part->componentId, hasColor, color);
+    });
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartDisableState, m_document, &Document::setPartDisableState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartXmirrorState, m_document, &Document::setPartXmirrorState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartRoundState, m_document, &Document::setPartRoundState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setPartWrapState, m_document, &Document::setPartCutRotation);
-
-    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::addNodesToBone, m_document, &Document::addNodesToBone);
-    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::removeNodesFromBone, m_document, &Document::removeNodesFromBone);
-
-    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::nodePicked, m_document, &Document::pickBoneNode);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setXlockState, m_document, &Document::setXlockState);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::setYlockState, m_document, &Document::setYlockState);
@@ -600,18 +780,21 @@ DocumentWindow::DocumentWindow()
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::disableAllPositionRelatedLocks, m_document, &Document::disableAllPositionRelatedLocks);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::changeTurnaround, this, &DocumentWindow::changeTurnaround);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::loadedTurnaroundImageFiles, this, &DocumentWindow::loadTurnaroundImageFiles);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::droppedDs3File, this, &DocumentWindow::openDroppedDs3File);
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::open, this, &DocumentWindow::open);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::showOrHideAllComponents, m_document, &Document::showOrHideAllComponents);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::showAllOrHideOtherComponents, m_document, &Document::showAllOrHideOtherComponents);
 
     connect(m_document, &Document::nodeAdded, canvasGraphicsWidget, &SkeletonGraphicsWidget::nodeAdded);
     connect(m_document, &Document::nodeRemoved, canvasGraphicsWidget, &SkeletonGraphicsWidget::nodeRemoved);
     connect(m_document, &Document::edgeAdded, canvasGraphicsWidget, &SkeletonGraphicsWidget::edgeAdded);
     connect(m_document, &Document::edgeRemoved, canvasGraphicsWidget, &SkeletonGraphicsWidget::edgeRemoved);
     connect(m_document, &Document::nodeRadiusChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::nodeRadiusChanged);
-    connect(m_document, &Document::nodeBoneJointStateChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::nodeBoneJointStateChanged);
     connect(m_document, &Document::nodeOriginChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::nodeOriginChanged);
     connect(m_document, &Document::edgeReversed, canvasGraphicsWidget, &SkeletonGraphicsWidget::edgeReversed);
+    connect(m_document, &Document::edgeNodeChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::edgeNodeChanged);
     connect(m_document, &Document::partVisibleStateChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::partVisibleStateChanged);
     connect(m_document, &Document::partDisableStateChanged, canvasGraphicsWidget, &SkeletonGraphicsWidget::partVisibleStateChanged);
     connect(m_document, &Document::cleanup, canvasGraphicsWidget, &SkeletonGraphicsWidget::removeAllContent);
@@ -622,21 +805,19 @@ DocumentWindow::DocumentWindow()
     connect(m_document, &Document::uncheckAll, canvasGraphicsWidget, &SkeletonGraphicsWidget::unselectAll);
     connect(m_document, &Document::checkNode, canvasGraphicsWidget, &SkeletonGraphicsWidget::addSelectNode);
     connect(m_document, &Document::checkEdge, canvasGraphicsWidget, &SkeletonGraphicsWidget::addSelectEdge);
+    connect(m_document, &Document::pasteDone, canvasGraphicsWidget, &SkeletonGraphicsWidget::switchProfileOnRangeSelection);
+    connect(m_document, &Document::clearSelections, canvasGraphicsWidget, &SkeletonGraphicsWidget::clearRangeSelection);
 
     connect(m_partManageWidget, &PartManageWidget::unselectAllOnCanvas, canvasGraphicsWidget, &SkeletonGraphicsWidget::unselectAll);
     connect(m_partManageWidget, &PartManageWidget::selectPartOnCanvas, canvasGraphicsWidget, &SkeletonGraphicsWidget::addPartToSelection);
 
     connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::partComponentChecked, m_partManageWidget, &PartManageWidget::selectComponentByPartId);
-
-    connect(m_boneManageWidget, &BoneManageWidget::selectNodeOnCanvas, canvasGraphicsWidget, &SkeletonGraphicsWidget::addNodeToSelection);
+    connect(canvasGraphicsWidget, &SkeletonGraphicsWidget::showComponentPropertyRequested, m_partManageWidget, &PartManageWidget::showComponentPropertyForParts);
 
     connect(m_document, &Document::skeletonChanged, m_document, &Document::generateMesh);
     connect(m_document, &Document::textureChanged, m_document, &Document::generateTexture);
     connect(m_document, &Document::resultMeshChanged, m_document, &Document::generateTexture);
-    connect(m_document, &Document::rigChanged, m_document, &Document::generateBone);
-    connect(m_document, &Document::resultMeshChanged, m_document, &Document::generateBone);
     connect(m_document, &Document::resultTextureChanged, this, &DocumentWindow::updateRenderModel);
-    connect(m_document, &Document::resultBodyBonePreviewMeshChanged, this, &DocumentWindow::updateRenderModel);
 
     connect(m_document, &Document::resultMeshChanged, this, &DocumentWindow::updateRenderModel);
     connect(m_document, &Document::resultMeshChanged, this, &DocumentWindow::updateRenderWireframe);
@@ -648,9 +829,9 @@ DocumentWindow::DocumentWindow()
 
     connect(m_document, &Document::skeletonChanged, this, &DocumentWindow::documentChanged);
     connect(m_document, &Document::textureChanged, this, &DocumentWindow::documentChanged);
-    connect(m_document, &Document::rigChanged, this, &DocumentWindow::documentChanged);
     connect(m_document, &Document::turnaroundChanged, this, &DocumentWindow::documentChanged);
     connect(m_document, &Document::optionsChanged, this, &DocumentWindow::documentChanged);
+    connect(m_document, &Document::rigTypeChanged, this, &DocumentWindow::documentChanged);
 
     connect(m_modelRenderWidget, &ModelWidget::customContextMenuRequested, [=](const QPoint& pos) {
         canvasGraphicsWidget->showContextMenu(canvasGraphicsWidget->mapFromGlobal(m_modelRenderWidget->mapToGlobal(pos)));
@@ -661,7 +842,14 @@ DocumentWindow::DocumentWindow()
     connect(m_document, &Document::zlockStateChanged, this, &DocumentWindow::updateZlockButtonState);
     connect(m_document, &Document::radiusLockStateChanged, this, &DocumentWindow::updateRadiusLockButtonState);
 
+    connect(m_bonesDocker, &QDockWidget::visibilityChanged, this, &DocumentWindow::onBonesDockerVisibilityChanged);
+    connect(m_animationsDocker, &QDockWidget::visibilityChanged, this, &DocumentWindow::onAnimationsDockerVisibilityChanged);
+
     initializeShortcuts();
+
+    makeDockWidgetsNonFocusable();
+
+    qApp->installEventFilter(this);
 
     connect(this, &DocumentWindow::initialized, m_document, &Document::uiReady);
 
@@ -677,11 +865,65 @@ DocumentWindow::DocumentWindow()
 
 void DocumentWindow::updateInprogressIndicator()
 {
-    bool inprogress = m_document->isMeshGenerating() || m_document->isTextureGenerating() || m_document->isBoneGenerating() || nullptr != m_componentPreviewImagesGenerator || nullptr != m_componentPreviewImagesDecorator;
+    bool inprogress = m_document->isMeshGenerating()
+        || m_document->isTextureGenerating()
+        || m_document->isRigGenerating()
+        || nullptr != m_componentPreviewImagesGenerator
+        || nullptr != m_componentPreviewImagesDecorator;
     if (inprogress == m_inprogressIndicator->isSpinning())
         return;
     m_inprogressIndicator->showSpinner(inprogress);
     emit workingStatusChanged(inprogress);
+}
+
+void DocumentWindow::updateTurnaroundShortcutsOverlay()
+{
+    if (nullptr == m_turnaroundShortcutsOverlay)
+        return;
+
+    const bool hasLoadedTurnaround = !m_document->turnaround.isNull();
+    const bool hasModelContent = !m_document->partMap.empty();
+    const bool isMissingTurnaround = !hasLoadedTurnaround && !hasModelContent;
+    m_turnaroundShortcutsOverlay->setVisible(isMissingTurnaround);
+
+    if (m_workflowReplayAction)
+        m_workflowReplayAction->setEnabled(hasLoadedTurnaround || hasModelContent);
+
+    if (m_turnaroundShortcutsOverlay) {
+        if (isMissingTurnaround) {
+            const QStringList cardTitles = {
+                tr("Get started"),
+                tr("Everything is a tube"),
+                tr("Draw a tube on reference image"),
+                tr("Generate mesh from tube"),
+                tr("Let's make a new creature"),
+                tr("Let's create a monster"),
+                tr("Modeling is fun"),
+                tr("Let's finish the game"),
+                tr("No reference image, no model")
+            };
+            int index = QRandomGenerator::global()->bounded(cardTitles.size());
+            m_turnaroundShortcutsOverlay->setCardTitle(cardTitles.at(index));
+        }
+    }
+
+    const QSize size = this->size();
+    if (!size.isEmpty()) {
+        m_turnaroundShortcutsOverlay->setFixedWidth(480);
+        m_turnaroundShortcutsOverlay->setMinimumHeight(340);
+        m_turnaroundShortcutsOverlay->adjustSize();
+        const int x = qMax(0, (size.width() - m_turnaroundShortcutsOverlay->width()) / 2);
+        const int y = qMax(0, (size.height() - m_turnaroundShortcutsOverlay->height()) / 2);
+        m_turnaroundShortcutsOverlay->move(x, y);
+    }
+    m_turnaroundShortcutsOverlay->raise();
+}
+
+void DocumentWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    if (m_turnaroundShortcutsOverlay && m_turnaroundShortcutsOverlay->isVisible())
+        updateTurnaroundShortcutsOverlay();
 }
 
 void DocumentWindow::toggleRotation()
@@ -691,10 +933,15 @@ void DocumentWindow::toggleRotation()
     m_canvasGraphicsWidget->setRotated(!m_canvasGraphicsWidget->rotated());
 }
 
-DocumentWindow* DocumentWindow::createDocumentWindow()
+DocumentWindow* DocumentWindow::createDocumentWindow(bool visible)
 {
     DocumentWindow* documentWindow = new DocumentWindow();
     documentWindow->setAttribute(Qt::WA_DeleteOnClose);
+
+    // Batch export (command line -o) never needs an on-screen window. Keeping it hidden
+    // avoids creating GL surfaces, which crashes on headless platforms (QT_QPA_PLATFORM=offscreen).
+    if (!visible)
+        return documentWindow;
 
     QSize size = Preferences::instance().documentWindowSize();
     if (size.isValid()) {
@@ -709,6 +956,8 @@ DocumentWindow* DocumentWindow::createDocumentWindow()
 
 void DocumentWindow::closeEvent(QCloseEvent* event)
 {
+#if defined(Q_OS_WASM)
+#else
     if (!m_documentSaved) {
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
@@ -720,6 +969,7 @@ void DocumentWindow::closeEvent(QCloseEvent* event)
             return;
         }
     }
+#endif
 
     QSize saveSize;
     if (!isMaximized())
@@ -758,6 +1008,8 @@ void DocumentWindow::newWindow()
 
 void DocumentWindow::newDocument()
 {
+#if defined(Q_OS_WASM)
+#else
     if (!m_documentSaved) {
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
@@ -767,6 +1019,7 @@ void DocumentWindow::newDocument()
         if (answer != QMessageBox::Yes)
             return;
     }
+#endif
     reset();
 }
 
@@ -799,13 +1052,6 @@ void DocumentWindow::saveAll()
     }
 }
 
-void DocumentWindow::viewSource()
-{
-    QString url = APP_REPOSITORY_URL;
-    qDebug() << "viewSource:" << url;
-    QDesktopServices::openUrl(QUrl(url));
-}
-
 void DocumentWindow::gotoHomepage()
 {
     QString url = APP_HOMEPAGE_URL;
@@ -825,16 +1071,87 @@ void DocumentWindow::reportIssues()
     QDesktopServices::openUrl(QUrl(url));
 }
 
-void DocumentWindow::seeReferenceGuide()
-{
-    QString url = APP_REFERENCE_GUIDE_URL;
-    qDebug() << "referenceGuide:" << url;
-    QDesktopServices::openUrl(QUrl(url));
-}
-
 void DocumentWindow::seeAcknowlegements()
 {
     DocumentWindow::showAcknowlegements();
+}
+
+void DocumentWindow::showKeyboardShortcuts()
+{
+    QDialog* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Keyboard Shortcuts"));
+    dialog->resize(520, 560);
+
+    auto* table = new QTableWidget(dialog);
+    table->setColumnCount(2);
+    table->setHorizontalHeaderLabels({ tr("Shortcut"), tr("Action") });
+    table->horizontalHeader()->setStretchLastSection(true);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setAlternatingRowColors(true);
+
+    struct Entry {
+        QString shortcut;
+        QString action;
+    };
+    const QVector<Entry> entries = {
+        // File
+        { tr("Ctrl+N"), tr("New Window") },
+        { tr("Ctrl+O"), tr("Open...") },
+        { tr("Ctrl+S"), tr("Save") },
+        // Edit
+        { tr("Ctrl+Z"), tr("Undo") },
+        { tr("Ctrl+Shift+Z"), tr("Redo") },
+        { tr("Ctrl+X"), tr("Cut") },
+        { tr("Ctrl+C"), tr("Copy") },
+        { tr("Ctrl+V"), tr("Paste") },
+        { tr("Delete / Backspace"), tr("Delete selected") },
+        { tr("Ctrl+A"), tr("Select All") },
+        // Tools
+        { tr("A"), tr("Add mode") },
+        { tr("S"), tr("Select mode") },
+        { tr("Escape"), tr("Cancel / Deselect") },
+        { tr("Space"), tr("Show component property") },
+        // View
+        { tr("W"), tr("Toggle Wireframe") },
+        { tr("R"), tr("Toggle Rotation") },
+        // Axis lock
+        { tr("X"), tr("Lock X axis") },
+        { tr("Y"), tr("Lock Y axis") },
+        { tr("Z"), tr("Lock Z axis") },
+        // Part toggles
+        { tr("H"), tr("Show / Hide selected part") },
+        { tr("Shift+H"), tr("Isolate part / show all (toggle)") },
+        { tr("J"), tr("Enable / Disable selected part") },
+        { tr("L"), tr("Lock / Unlock selected part") },
+        { tr("M"), tr("Toggle X-Mirror") },
+        { tr("B"), tr("Toggle Subdivide") },
+        { tr("U"), tr("Toggle Round End") },
+        { tr("C"), tr("Toggle Chamfer") },
+        { tr("E"), tr("Switch profile on selected") },
+        { tr("F"), tr("Check part component") },
+        // Canvas manipulation
+        { tr("= / -"), tr("Zoom selected +/-1") },
+        { tr("Alt+= / Alt+-"), tr("Zoom rendered model +/-10") },
+        { tr(", / ."), tr("Rotate selected +/-1 deg") },
+        { tr("[ / ]"), tr("Scale selected +/-1") },
+        { tr("Arrow keys"), tr("Move selected") },
+    };
+
+    table->setRowCount(entries.size());
+    for (int i = 0; i < entries.size(); ++i) {
+        table->setItem(i, 0, new QTableWidgetItem(entries[i].shortcut));
+        table->setItem(i, 1, new QTableWidgetItem(entries[i].action));
+    }
+
+    auto* layout = new QVBoxLayout(dialog);
+    layout->addWidget(table);
+    dialog->setLayout(layout);
+    dialog->exec();
 }
 
 void DocumentWindow::seeContributors()
@@ -849,9 +1166,55 @@ void DocumentWindow::seeSupporters()
 
 DocumentWindow::~DocumentWindow()
 {
+    qApp->removeEventFilter(this);
     emit uninialized();
     g_documentWindows.erase(this);
     delete m_document;
+    m_document = nullptr;
+}
+
+void DocumentWindow::makeDockWidgetsNonFocusable()
+{
+    // Dock panel widgets are mouse-driven UI; they must not steal keyboard focus
+    // from the canvas, otherwise window-level shortcuts (QShortcut with
+    // Qt::WindowShortcut context) are blocked by ShortcutOverride events that
+    // QAbstractItemView and similar widgets claim for themselves.
+    const auto docks = findChildren<QDockWidget*>();
+    for (auto* dock : docks) {
+        for (auto* w : dock->findChildren<QWidget*>()) {
+            if (!qobject_cast<QLineEdit*>(w)
+                && !qobject_cast<QTextEdit*>(w)
+                && !qobject_cast<QAbstractSpinBox*>(w)) {
+                w->setFocusPolicy(Qt::NoFocus);
+            }
+        }
+    }
+}
+
+bool DocumentWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    // A single application-level filter: when a mouse press lands on a
+    // Qt::NoFocus child of this window (i.e. a dock panel widget), pull
+    // keyboard focus back to the canvas.  This handles the case where a
+    // QLineEdit in one dock already held focus — Qt::NoFocus silently keeps
+    // that focus on the line edit, so no focusChanged signal fires and the
+    // line edit's ShortcutOverride would otherwise continue to block shortcuts.
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* w = qobject_cast<QWidget*>(watched);
+        if (w && w->focusPolicy() == Qt::NoFocus && isAncestorOf(w))
+            m_canvasGraphicsWidget->setFocus();
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void DocumentWindow::changeEvent(QEvent* event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+        QWidget* focusedWidget = QApplication::focusWidget();
+        if (nullptr == focusedWidget || !isAncestorOf(focusedWidget))
+            m_canvasGraphicsWidget->setFocus();
+    }
 }
 
 void DocumentWindow::showEvent(QShowEvent* event)
@@ -863,6 +1226,7 @@ void DocumentWindow::showEvent(QShowEvent* event)
         m_document->saveSnapshot();
         m_canvasGraphicsWidget->setFocus();
         emit initialized();
+        updateTurnaroundShortcutsOverlay();
     }
 }
 
@@ -873,20 +1237,91 @@ void DocumentWindow::mousePressEvent(QMouseEvent* event)
 
 void DocumentWindow::changeTurnaround()
 {
-    QString fileName = QFileDialog::getOpenFileName(this, QString(), QString(),
-        tr("Image Files (*.png *.jpg *.bmp)"))
-                           .trimmed();
-    if (fileName.isEmpty())
+#if defined(Q_OS_WASM)
+    QFileDialog::getOpenFileContent(tr("Image Files (*.png *.jpg *.jpeg *.bmp)"),
+        [=](const QString& fileName, const QByteArray& fileContent) {
+            if (fileName.isEmpty())
+                return;
+            QImage image;
+            if (!image.loadFromData(fileContent))
+                return;
+            m_document->updateTurnaround(image);
+        });
+#else
+    QTimer::singleShot(10, this, [this]() {
+        TurnaroundImageEditorDialog dialog(this);
+        if (dialog.exec() == QDialog::Accepted) {
+            QImage result = dialog.resultImage();
+            if (!result.isNull()) {
+                m_document->updateTurnaround(result);
+                m_document->setOriginX(dialog.resultOriginX());
+                m_document->setOriginY(dialog.resultOriginY());
+                m_document->setOriginZ(dialog.resultOriginZ());
+                emit m_document->originChanged();
+            }
+        }
+    });
+#endif
+}
+
+void DocumentWindow::loadTurnaroundImageFiles(QStringList fileNames)
+{
+    if (fileNames.isEmpty())
         return;
-    QImage image;
-    if (!image.load(fileName))
+
+    // Defer opening the modal editor until after the current event is finished.
+    // This avoids blocking a drag/drop operation that may have opened the editor.
+    QTimer::singleShot(10, this, [this, fileNames = std::move(fileNames)]() mutable {
+        TurnaroundImageEditorDialog dialog(this, fileNames);
+        if (dialog.exec() == QDialog::Accepted) {
+            QImage result = dialog.resultImage();
+            if (!result.isNull()) {
+                m_document->updateTurnaround(result);
+                m_document->setOriginX(dialog.resultOriginX());
+                m_document->setOriginY(dialog.resultOriginY());
+                m_document->setOriginZ(dialog.resultOriginZ());
+                emit m_document->originChanged();
+            }
+        }
+    });
+}
+
+void DocumentWindow::eraseTurnaround()
+{
+    if (m_document->turnaround.isNull())
         return;
+
+#if defined(Q_OS_WASM)
+#else
+    QMessageBox::StandardButton answer = QMessageBox::question(this,
+        APP_NAME,
+        tr("Do you really want to erase background image? This can not be undo."),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+#endif
+
+    QImage image(m_document->turnaround.width(), m_document->turnaround.height(), QImage::Format_RGBA8888);
+    image.fill(0);
     m_document->updateTurnaround(image);
 }
 
 void DocumentWindow::save()
 {
+#if defined(Q_OS_WASM)
+    dust3d::Snapshot snapshot;
+    m_document->toSnapshot(&snapshot);
+    QByteArray fileContent;
+    if (DocumentSaver::save(fileContent,
+            &snapshot,
+            (!m_document->turnaround.isNull() && m_document->turnaroundPngByteArray.size() > 0) ? &m_document->turnaroundPngByteArray : nullptr)) {
+        setCurrentFilename(m_currentFilename);
+        QFileDialog::saveFileContent(fileContent, exportedFilename(m_currentFilename, ".ds3"));
+    }
+#else
     saveTo(m_currentFilename);
+#endif
 }
 
 void DocumentWindow::saveTo(const QString& saveAsFilename)
@@ -909,19 +1344,19 @@ void DocumentWindow::saveTo(const QString& saveAsFilename)
             &snapshot,
             (!m_document->turnaround.isNull() && m_document->turnaroundPngByteArray.size() > 0) ? &m_document->turnaroundPngByteArray : nullptr)) {
         setCurrentFilename(filename);
+        Preferences::instance().setCurrentFile(filename);
+        for (auto& it : g_documentWindows) {
+            it.first->updateRecentFileActions();
+        }
     }
     QApplication::restoreOverrideCursor();
 }
 
-void DocumentWindow::openPathAs(const QString& path, const QString& asName)
+void DocumentWindow::openPathDataAs(const QString& path, const QByteArray& fileData, const QString& asName)
 {
     QApplication::setOverrideCursor(Qt::WaitCursor);
 
     reset();
-
-    QFile file(path);
-    file.open(QFile::ReadOnly);
-    QByteArray fileData = file.readAll();
 
     dust3d::Ds3FileReader ds3Reader((const std::uint8_t*)fileData.data(), fileData.size());
     for (int i = 0; i < (int)ds3Reader.items().size(); ++i) {
@@ -938,6 +1373,16 @@ void DocumentWindow::openPathAs(const QString& path, const QString& asName)
                     QImage image = QImage::fromData(data.data(), (int)data.size(), "PNG");
                     (void)ImageForever::add(&image, imageId);
                 }
+            } else if (dust3d::String::startsWith(item.name, "models/")) {
+                std::string filename = dust3d::String::split(item.name, '/')[1];
+                std::string glbIdString = dust3d::String::split(filename, '.')[0];
+                dust3d::Uuid glbId = dust3d::Uuid(glbIdString);
+                if (!glbId.isNull()) {
+                    std::vector<std::uint8_t> data;
+                    ds3Reader.loadItem(item.name, &data);
+                    QByteArray glbData((const char*)data.data(), (int)data.size());
+                    (void)GlbForever::add(&glbData, glbId);
+                }
             }
         }
     }
@@ -945,18 +1390,26 @@ void DocumentWindow::openPathAs(const QString& path, const QString& asName)
     for (int i = 0; i < (int)ds3Reader.items().size(); ++i) {
         const dust3d::Ds3ReaderItem& item = ds3Reader.items()[i];
         if (item.type == "model") {
+            static constexpr size_t maxXmlSize = 256 * 1024 * 1024; // 256 MB
             std::vector<std::uint8_t> data;
             ds3Reader.loadItem(item.name, &data);
+            if (data.size() > maxXmlSize) {
+                qWarning() << "Skipping oversized model XML chunk:" << data.size() << "bytes (limit" << maxXmlSize << ")";
+                continue;
+            }
             data.push_back('\0');
             dust3d::Snapshot snapshot;
-            loadSnapshotFromXmlString(&snapshot, (char*)data.data());
+            loadSnapshotFromXmlString(&snapshot, reinterpret_cast<char*>(data.data()));
+            unifySnapshotEdgeLinkDirection(snapshot);
             m_document->fromSnapshot(snapshot);
             m_document->saveSnapshot();
         } else if (item.type == "asset") {
             if (item.name == "canvas.png") {
                 std::vector<std::uint8_t> data;
                 ds3Reader.loadItem(item.name, &data);
-                m_document->updateTurnaround(QImage::fromData(data.data(), (int)data.size(), "PNG"));
+                QImage canvasImage = QImage::fromData(data.data(), (int)data.size(), "PNG");
+                if (!canvasImage.isNull())
+                    m_document->updateTurnaround(canvasImage);
             }
         }
     }
@@ -972,23 +1425,194 @@ void DocumentWindow::openPathAs(const QString& path, const QString& asName)
     setCurrentFilename(asName);
 }
 
-void DocumentWindow::openExample(const QString& modelName)
+void DocumentWindow::openPathAs(const QString& path, const QString& asName)
 {
+    QFile file(path);
+    file.open(QFile::ReadOnly);
+    QByteArray fileData = file.readAll();
+
+    openPathDataAs(path, fileData, asName);
+}
+
+bool DocumentWindow::openDroppedDs3File(const QString& filename)
+{
+#if defined(Q_OS_WASM)
+    Q_UNUSED(filename);
+    return false;
+#else
     if (!m_documentSaved) {
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
-            tr("Do you really want to open example and lose the unsaved changes?"),
+            tr("Do you really want to open another file and lose the unsaved changes?"),
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
         if (answer != QMessageBox::Yes)
+            return false;
+    }
+    openPathAs(filename, filename);
+    return true;
+#endif
+}
+
+void DocumentWindow::unifySnapshotEdgeLinkDirection(dust3d::Snapshot& snapshot)
+{
+    std::unordered_map<std::string, std::unordered_map<std::string, std::unordered_set<std::string>>> links;
+    std::unordered_set<std::string> linkSet;
+    std::unordered_set<std::string> notUnifiedParties;
+    for (auto& edgeIt : snapshot.edges) {
+        std::string partIdString = dust3d::String::valueOrEmpty(edgeIt.second, "partId");
+        std::string fromNodeIdString = dust3d::String::valueOrEmpty(edgeIt.second, "from");
+        std::string toNodeIdString = dust3d::String::valueOrEmpty(edgeIt.second, "to");
+        links[partIdString][fromNodeIdString].insert(toNodeIdString);
+        links[partIdString][toNodeIdString].insert(fromNodeIdString);
+        auto insertResult = linkSet.insert(partIdString + ">" + fromNodeIdString);
+        if (insertResult.second)
+            continue;
+        notUnifiedParties.insert(partIdString);
+    }
+    if (notUnifiedParties.empty())
+        return;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> partOneWayLinks;
+    for (const auto& partIdString : notUnifiedParties) {
+        auto partyIt = links.find(partIdString);
+        if (partyIt == links.end())
+            continue;
+        std::vector<std::pair<std::string, int>> endpoints;
+        for (const auto& edgeIt : partyIt->second) {
+            if (1 == edgeIt.second.size()) {
+                endpoints.push_back(std::make_pair(edgeIt.first, linkSet.end() != linkSet.find(partIdString + ">" + edgeIt.first) ? 1 : 0));
+            }
+        }
+        std::sort(endpoints.begin(), endpoints.end(), [](const auto& first, const auto& second) {
+            return first.second < second.second;
+        });
+        if (endpoints.empty()) {
+            endpoints.push_back(std::make_pair(partyIt->second.begin()->first, 0));
+        }
+        std::vector<std::string> nodeIdList;
+        auto loopNodeIdString = endpoints.back().first;
+        nodeIdList.push_back(loopNodeIdString);
+        std::unordered_set<std::string> visited;
+        bool continueLoop = true;
+        while (continueLoop) {
+            nodeIdList.push_back(loopNodeIdString);
+            visited.insert(loopNodeIdString);
+            auto nextIt = partyIt->second.find(loopNodeIdString);
+            continueLoop = false;
+            for (const auto& next : nextIt->second) {
+                if (visited.end() == visited.find(next)) {
+                    loopNodeIdString = next;
+                    continueLoop = true;
+                    break;
+                }
+            }
+        }
+        for (size_t i = 0; i < nodeIdList.size(); ++i) {
+            size_t j = (i + 1) % nodeIdList.size();
+            partOneWayLinks[partIdString][nodeIdList[i]] = nodeIdList[j];
+        }
+    }
+    for (auto& edgeIt : snapshot.edges) {
+        std::string partIdString = dust3d::String::valueOrEmpty(edgeIt.second, "partId");
+        auto oneWayLinksIt = partOneWayLinks.find(partIdString);
+        if (oneWayLinksIt == partOneWayLinks.end())
+            continue;
+        std::string fromNodeIdString = dust3d::String::valueOrEmpty(edgeIt.second, "from");
+        std::string toNodeIdString = dust3d::String::valueOrEmpty(edgeIt.second, "to");
+        auto nextIt = oneWayLinksIt->second.find(fromNodeIdString);
+        if (nextIt != oneWayLinksIt->second.end() && nextIt->second == toNodeIdString)
+            continue;
+        edgeIt.second["from"] = toNodeIdString;
+        edgeIt.second["to"] = fromNodeIdString;
+    }
+}
+
+static bool mimeDataHasImageOrDs3(const QMimeData* mimeData)
+{
+    if (!mimeData->hasUrls())
+        return false;
+
+    for (const auto& url : mimeData->urls()) {
+        QString lower = url.toLocalFile().toLower();
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".bmp") || lower.endsWith(".ds3"))
+            return true;
+    }
+    return false;
+}
+
+void DocumentWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) {
+        if (mimeDataHasImageOrDs3(event->mimeData()) && m_turnaroundShortcutsOverlay && m_turnaroundShortcutsOverlay->isVisible()) {
+            event->acceptProposedAction();
             return;
+        }
+        for (const auto& url : event->mimeData()->urls()) {
+            if (url.toLocalFile().toLower().endsWith(".ds3")) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+}
+
+void DocumentWindow::dropEvent(QDropEvent* event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        event->ignore();
+        return;
     }
 
-    openPathAs(":/resources/" + modelName, "");
+    QStringList imageFiles;
+    QString ds3File;
+    for (const auto& url : event->mimeData()->urls()) {
+        QString filename = url.toLocalFile();
+        QString lower = filename.toLower();
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".bmp")) {
+            imageFiles.append(filename);
+            continue;
+        }
+        if (lower.endsWith(".ds3")) {
+            ds3File = filename;
+        }
+    }
+
+    if (!imageFiles.isEmpty() && m_turnaroundShortcutsOverlay && m_turnaroundShortcutsOverlay->isVisible()) {
+        loadTurnaroundImageFiles(imageFiles);
+        event->acceptProposedAction();
+        return;
+    }
+
+    if (!ds3File.isEmpty()) {
+        if (!m_documentSaved) {
+            QMessageBox::StandardButton answer = QMessageBox::question(this,
+                APP_NAME,
+                tr("Do you really want to open another file and lose the unsaved changes?"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No);
+            if (answer != QMessageBox::Yes) {
+                event->ignore();
+                return;
+            }
+        }
+        openPathAs(ds3File, ds3File);
+        event->acceptProposedAction();
+        return;
+    }
+
+    event->ignore();
 }
 
 void DocumentWindow::open()
 {
+#if defined(Q_OS_WASM)
+    QFileDialog::getOpenFileContent(tr("Dust3D Document (*.ds3)"),
+        [=](const QString& filename, const QByteArray& fileContent) {
+            if (filename.isEmpty())
+                return;
+            openPathDataAs(filename, fileContent, filename);
+        });
+#else
     if (!m_documentSaved) {
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
@@ -998,17 +1622,28 @@ void DocumentWindow::open()
         if (answer != QMessageBox::Yes)
             return;
     }
-
     QString filename = QFileDialog::getOpenFileName(this, QString(), QString(),
         tr("Dust3D Document (*.ds3)"));
     if (filename.isEmpty())
         return;
 
     openPathAs(filename, filename);
+#endif
 }
 
 void DocumentWindow::exportObjResult()
 {
+#if defined(Q_OS_WASM)
+    QByteArray fileData;
+    QTextStream stream(&fileData);
+    ModelMesh* resultMesh = m_document->takeResultMesh();
+    if (nullptr != resultMesh) {
+        resultMesh->exportAsObj(&stream);
+        delete resultMesh;
+    }
+    stream.flush();
+    QFileDialog::saveFileContent(fileData, exportedFilename(m_currentFilename, ".obj"));
+#else
     QString filename = QFileDialog::getSaveFileName(this, QString(), QString(),
         tr("Wavefront (*.obj)"));
     if (filename.isEmpty()) {
@@ -1016,6 +1651,7 @@ void DocumentWindow::exportObjResult()
     }
     ensureFileExtension(&filename, ".obj");
     exportObjToFilename(filename);
+#endif
 }
 
 void DocumentWindow::exportObjToFilename(const QString& filename)
@@ -1046,21 +1682,136 @@ void DocumentWindow::exportFbxToFilename(const QString& filename)
         qDebug() << "Export but document is not export ready";
         return;
     }
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    dust3d::Object skeletonResult = m_document->currentUvMappedObject();
-    FbxFileWriter fbxFileWriter(skeletonResult,
-        filename,
-        m_document->textureImage,
-        m_document->textureNormalImage,
-        m_document->textureMetalnessImage,
-        m_document->textureRoughnessImage,
-        m_document->textureAmbientOcclusionImage);
-    fbxFileWriter.save();
-    QApplication::restoreOverrideCursor();
+
+    if (!m_document->hasRigWithBindings()) {
+        // No rig: export mesh + UV + textures only
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        dust3d::Object uvObject = m_document->currentUvMappedObject();
+        FbxFileWriter fbxFileWriter(uvObject, filename,
+            m_document->textureImage.get(),
+            m_document->textureNormalImage.get(),
+            m_document->textureMetalnessImage.get(),
+            m_document->textureRoughnessImage.get(),
+            m_document->textureAmbientOcclusionImage.get());
+        fbxFileWriter.save();
+        QApplication::restoreOverrideCursor();
+        return;
+    }
+
+    // Verify meshIds match
+    const dust3d::Object* rigObject = m_document->currentRigObject();
+    const dust3d::Object& uvObject = m_document->currentUvMappedObject();
+    if (rigObject->meshId != uvObject.meshId) {
+        QMessageBox::warning(this, tr("Export"), tr("Rig generation is still in progress. Please wait and try again."));
+        return;
+    }
+
+    // Collect animations
+    std::vector<Document::Animation> animations;
+    {
+        std::vector<dust3d::Uuid> animationIds;
+        m_document->getAllAnimationIds(animationIds);
+        for (const auto& id : animationIds) {
+            const Document::Animation* anim = m_document->findAnimation(id);
+            if (anim)
+                animations.push_back(*anim);
+        }
+    }
+
+    if (animations.empty()) {
+        // Rig but no animations
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        ExportAnimationWorker worker;
+        worker.setParameters(m_document->getActualRigStructure(), animations);
+        worker.process();
+        dust3d::Object rigWithUv = *rigObject;
+        rigWithUv.copyUvFrom(uvObject);
+        FbxFileWriter fbxFileWriter(rigWithUv, filename,
+            m_document->textureImage.get(),
+            m_document->textureNormalImage.get(),
+            m_document->textureMetalnessImage.get(),
+            m_document->textureRoughnessImage.get(),
+            m_document->textureAmbientOcclusionImage.get(),
+            &m_document->getActualRigStructure(),
+            &worker.inverseBindMatrices(),
+            nullptr);
+        fbxFileWriter.save();
+        QApplication::restoreOverrideCursor();
+        return;
+    }
+
+    // Rig + animations: background thread with progress dialog
+    ExportProgressWidget* progressWidget = new ExportProgressWidget(this);
+    progressWidget->show();
+    progressWidget->setStep(tr("Generating animations..."));
+
+    ExportAnimationWorker* worker = new ExportAnimationWorker;
+    worker->setParameters(m_document->getActualRigStructure(), animations);
+
+    QThread* thread = new QThread;
+    worker->moveToThread(thread);
+
+    RigStructure rigStructure = m_document->getActualRigStructure();
+    dust3d::Object rigObjectCopy = *rigObject;
+    rigObjectCopy.copyUvFrom(uvObject);
+    QImage* textureImage = m_document->textureImage.get() ? new QImage(*m_document->textureImage.get()) : nullptr;
+    QImage* normalImage = m_document->textureNormalImage.get() ? new QImage(*m_document->textureNormalImage.get()) : nullptr;
+    QImage* metalnessImage = m_document->textureMetalnessImage.get() ? new QImage(*m_document->textureMetalnessImage.get()) : nullptr;
+    QImage* roughnessImage = m_document->textureRoughnessImage.get() ? new QImage(*m_document->textureRoughnessImage.get()) : nullptr;
+    QImage* aoImage = m_document->textureAmbientOcclusionImage.get() ? new QImage(*m_document->textureAmbientOcclusionImage.get()) : nullptr;
+
+    connect(thread, &QThread::started, worker, &ExportAnimationWorker::process);
+    connect(worker, &ExportAnimationWorker::progress, this, [progressWidget](int current, int total) {
+        progressWidget->updateProgress(tr("Generating animations..."), current, total);
+    });
+    connect(worker, &ExportAnimationWorker::finished, this, [=]() mutable {
+        progressWidget->setStep(tr("Writing file..."));
+        QApplication::processEvents();
+
+        auto clips = worker->takeAnimationClips();
+        const auto& ibm = worker->inverseBindMatrices();
+
+        FbxFileWriter fbxFileWriter(rigObjectCopy, filename,
+            textureImage, normalImage, metalnessImage, roughnessImage, aoImage,
+            &rigStructure,
+            &ibm,
+            &clips);
+        fbxFileWriter.save();
+
+        delete textureImage;
+        delete normalImage;
+        delete metalnessImage;
+        delete roughnessImage;
+        delete aoImage;
+        progressWidget->close();
+        progressWidget->deleteLater();
+        worker->deleteLater();
+        thread->quit();
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+    thread->start();
 }
 
 void DocumentWindow::exportGlbResult()
 {
+#if defined(Q_OS_WASM)
+    if (!m_document->isExportReady())
+        return;
+    QByteArray fileData;
+    dust3d::Object skeletonResult = m_document->currentUvMappedObject();
+    QImage* textureMetalnessRoughnessAmbientOcclusionImage = UvMapGenerator::combineMetalnessRoughnessAmbientOcclusionImages(m_document->textureMetalnessImage.get(),
+        m_document->textureRoughnessImage.get(),
+        m_document->textureAmbientOcclusionImage.get());
+    GlbFileWriter glbFileWriter(skeletonResult, m_currentFilename + ".glb",
+        m_document->textureImage.get(), m_document->textureNormalImage.get(), textureMetalnessRoughnessAmbientOcclusionImage);
+    {
+        QDataStream stream(&fileData, QIODeviceBase::Append);
+        glbFileWriter.save(stream);
+    }
+    delete textureMetalnessRoughnessAmbientOcclusionImage;
+    QFileDialog::saveFileContent(fileData, exportedFilename(m_currentFilename, ".glb"));
+#else
     QString filename = QFileDialog::getSaveFileName(this, QString(), QString(),
         tr("glTF Binary Format (*.glb)"));
     if (filename.isEmpty()) {
@@ -1068,24 +1819,354 @@ void DocumentWindow::exportGlbResult()
     }
     ensureFileExtension(&filename, ".glb");
     exportGlbToFilename(filename);
+#endif
 }
 
-void DocumentWindow::exportGlbToFilename(const QString& filename)
+void DocumentWindow::exportGlbToFilename(const QString& filename, std::function<void()> onFinished)
 {
     if (!m_document->isExportReady()) {
         qDebug() << "Export but document is not export ready";
+        if (onFinished)
+            onFinished();
         return;
     }
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    dust3d::Object skeletonResult = m_document->currentUvMappedObject();
-    QImage* textureMetalnessRoughnessAmbientOcclusionImage = UvMapGenerator::combineMetalnessRoughnessAmbientOcclusionImages(m_document->textureMetalnessImage,
-        m_document->textureRoughnessImage,
-        m_document->textureAmbientOcclusionImage);
-    GlbFileWriter glbFileWriter(skeletonResult, filename,
-        m_document->textureImage, m_document->textureNormalImage, textureMetalnessRoughnessAmbientOcclusionImage);
-    glbFileWriter.save();
-    delete textureMetalnessRoughnessAmbientOcclusionImage;
-    QApplication::restoreOverrideCursor();
+
+    QImage* ormImage = UvMapGenerator::combineMetalnessRoughnessAmbientOcclusionImages(
+        m_document->textureMetalnessImage.get(),
+        m_document->textureRoughnessImage.get(),
+        m_document->textureAmbientOcclusionImage.get());
+
+    if (!m_document->hasRigWithBindings()) {
+        // No rig case: export mesh + UV + textures only
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        dust3d::Object uvObject = m_document->currentUvMappedObject();
+        GlbFileWriter glbFileWriter(uvObject, filename,
+            m_document->textureImage.get(), m_document->textureNormalImage.get(), ormImage,
+            nullptr, nullptr, nullptr, m_document->textureEmissiveImage.get());
+        glbFileWriter.save();
+        delete ormImage;
+        QApplication::restoreOverrideCursor();
+        if (onFinished)
+            onFinished();
+        return;
+    }
+
+    // Verify meshIds match between rig and UV objects
+    const dust3d::Object* rigObject = m_document->currentRigObject();
+    const dust3d::Object& uvObject = m_document->currentUvMappedObject();
+    if (rigObject->meshId != uvObject.meshId) {
+        QMessageBox::warning(this, tr("Export"), tr("Rig generation is still in progress. Please wait and try again."));
+        delete ormImage;
+        if (onFinished)
+            onFinished();
+        return;
+    }
+
+    // Collect animations
+    std::vector<Document::Animation> animations;
+    {
+        std::vector<dust3d::Uuid> animationIds;
+        m_document->getAllAnimationIds(animationIds);
+        for (const auto& id : animationIds) {
+            const Document::Animation* anim = m_document->findAnimation(id);
+            if (anim)
+                animations.push_back(*anim);
+        }
+    }
+
+    if (animations.empty()) {
+        // Rig but no animations
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        ExportAnimationWorker worker;
+        worker.setParameters(m_document->getActualRigStructure(), animations);
+        worker.process();
+        dust3d::Object rigWithUv = *rigObject;
+        rigWithUv.copyUvFrom(uvObject);
+        GlbFileWriter glbFileWriter(rigWithUv, filename,
+            m_document->textureImage.get(), m_document->textureNormalImage.get(), ormImage,
+            &m_document->getActualRigStructure(),
+            &worker.inverseBindMatrices(),
+            nullptr, m_document->textureEmissiveImage.get());
+        glbFileWriter.save();
+        delete ormImage;
+        QApplication::restoreOverrideCursor();
+        if (onFinished)
+            onFinished();
+        return;
+    }
+
+    // Rig + animations: run worker in background thread with progress dialog
+    ExportProgressWidget* progressWidget = new ExportProgressWidget(this);
+    progressWidget->show();
+    progressWidget->setStep(tr("Generating animations..."));
+
+    ExportAnimationWorker* worker = new ExportAnimationWorker;
+    worker->setParameters(m_document->getActualRigStructure(), animations);
+
+    QThread* thread = new QThread;
+    worker->moveToThread(thread);
+
+    // Capture data needed after thread finishes
+    RigStructure rigStructure = m_document->getActualRigStructure();
+    dust3d::Object rigObjectCopy = *rigObject;
+    rigObjectCopy.copyUvFrom(uvObject);
+    QImage* textureImage = m_document->textureImage.get() ? new QImage(*m_document->textureImage.get()) : nullptr;
+    QImage* normalImage = m_document->textureNormalImage.get() ? new QImage(*m_document->textureNormalImage.get()) : nullptr;
+    QImage* emissiveImage = m_document->textureEmissiveImage.get() ? new QImage(*m_document->textureEmissiveImage.get()) : nullptr;
+
+    connect(thread, &QThread::started, worker, &ExportAnimationWorker::process);
+    connect(worker, &ExportAnimationWorker::progress, this, [progressWidget](int current, int total) {
+        progressWidget->updateProgress(tr("Generating animations..."), current, total);
+    });
+    connect(worker, &ExportAnimationWorker::finished, this, [=]() mutable {
+        progressWidget->setStep(tr("Writing file..."));
+        QApplication::processEvents();
+
+        auto clips = worker->takeAnimationClips();
+        const auto& ibm = worker->inverseBindMatrices();
+
+        GlbFileWriter glbFileWriter(rigObjectCopy, filename,
+            textureImage, normalImage, ormImage,
+            &rigStructure,
+            &ibm,
+            &clips, emissiveImage);
+        glbFileWriter.save();
+
+        delete textureImage;
+        delete normalImage;
+        delete emissiveImage;
+        delete ormImage;
+        progressWidget->close();
+        progressWidget->deleteLater();
+        worker->deleteLater();
+        thread->quit();
+        if (onFinished)
+            onFinished();
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+    thread->start();
+}
+
+void DocumentWindow::exportGlbAndWavsResult()
+{
+    QString directory = QFileDialog::getExistingDirectory(this, tr("Select Export Directory"));
+    if (directory.isEmpty())
+        return;
+    exportModelAndWavs(directory, "glb");
+}
+
+void DocumentWindow::exportFbxAndWavsResult()
+{
+    QString directory = QFileDialog::getExistingDirectory(this, tr("Select Export Directory"));
+    if (directory.isEmpty())
+        return;
+    exportModelAndWavs(directory, "fbx");
+}
+
+void DocumentWindow::exportModelAndWavs(const QString& directory, const QString& format)
+{
+    if (!m_document->isExportReady()) {
+        QMessageBox::warning(this, tr("Export"), tr("Document is not ready for export."));
+        return;
+    }
+
+    // Determine model name: ds3 filename stem > rigType > "model"
+    QString modelName;
+    if (!m_currentFilename.isEmpty()) {
+        QFileInfo fi(m_currentFilename);
+        modelName = fi.completeBaseName();
+    }
+    if (modelName.isEmpty()) {
+        QString rigType = m_document->getRigType();
+        if (!rigType.isEmpty() && rigType != "None")
+            modelName = rigType;
+        else
+            modelName = "model";
+    }
+
+    // Collect animations from the document
+    std::vector<Document::Animation> animations;
+    {
+        std::vector<dust3d::Uuid> animationIds;
+        m_document->getAllAnimationIds(animationIds);
+        for (const auto& id : animationIds) {
+            const Document::Animation* anim = m_document->findAnimation(id);
+            if (anim)
+                animations.push_back(*anim);
+        }
+    }
+
+    // Capture document data needed for model export on background thread
+    bool hasRig = m_document->hasRigWithBindings();
+    RigStructure rigStructure = m_document->getActualRigStructure();
+    dust3d::Object uvObject = m_document->currentUvMappedObject();
+
+    dust3d::Object rigObjectCopy;
+    if (hasRig) {
+        const dust3d::Object* rigObject = m_document->currentRigObject();
+        if (rigObject->meshId != uvObject.meshId) {
+            QMessageBox::warning(this, tr("Export"), tr("Rig generation is still in progress. Please wait and try again."));
+            return;
+        }
+        rigObjectCopy = *rigObject;
+        rigObjectCopy.copyUvFrom(uvObject);
+    }
+
+    // Copy texture images
+    QImage* textureImage = m_document->textureImage.get() ? new QImage(*m_document->textureImage.get()) : nullptr;
+    QImage* normalImage = m_document->textureNormalImage.get() ? new QImage(*m_document->textureNormalImage.get()) : nullptr;
+    QImage* metalnessImage = m_document->textureMetalnessImage.get() ? new QImage(*m_document->textureMetalnessImage.get()) : nullptr;
+    QImage* roughnessImage = m_document->textureRoughnessImage.get() ? new QImage(*m_document->textureRoughnessImage.get()) : nullptr;
+    QImage* aoImage = m_document->textureAmbientOcclusionImage.get() ? new QImage(*m_document->textureAmbientOcclusionImage.get()) : nullptr;
+    QImage* emissiveImage = m_document->textureEmissiveImage.get() ? new QImage(*m_document->textureEmissiveImage.get()) : nullptr;
+    QImage* ormImage = UvMapGenerator::combineMetalnessRoughnessAmbientOcclusionImages(
+        m_document->textureMetalnessImage.get(),
+        m_document->textureRoughnessImage.get(),
+        m_document->textureAmbientOcclusionImage.get());
+
+    // Show progress dialog
+    ExportProgressWidget* progressWidget = new ExportProgressWidget(this);
+    progressWidget->show();
+    progressWidget->setStep(tr("Generating animations..."));
+
+    // Set up worker to generate animation clips in background thread
+    ExportAnimationWorker* worker = new ExportAnimationWorker;
+    worker->setParameters(rigStructure, animations);
+
+    QThread* thread = new QThread;
+    worker->moveToThread(thread);
+
+    // Capture animation type/name info for WAV generation
+    std::vector<std::string> animTypes;
+    std::vector<std::string> animNames;
+    for (const auto& anim : animations) {
+        animTypes.push_back(anim.type.toStdString());
+        animNames.push_back(anim.name.toStdString());
+    }
+
+    QString modelPath = directory + "/" + modelName + "." + format;
+
+    connect(thread, &QThread::started, worker, &ExportAnimationWorker::process);
+    connect(worker, &ExportAnimationWorker::progress, this, [progressWidget](int current, int total) {
+        progressWidget->updateProgress(tr("Generating animations..."), current, total);
+    });
+    connect(worker, &ExportAnimationWorker::finished, this, [=]() mutable {
+        progressWidget->setStep(tr("Writing model and WAV files..."));
+        QApplication::processEvents();
+
+        auto clips = worker->takeAnimationClips();
+        const auto& ibm = worker->inverseBindMatrices();
+
+        // Write model file
+        if (format == "glb") {
+            if (hasRig && !clips.empty()) {
+                GlbFileWriter glbFileWriter(rigObjectCopy, modelPath,
+                    textureImage, normalImage, ormImage,
+                    &rigStructure, &ibm, &clips, emissiveImage);
+                glbFileWriter.save();
+            } else if (hasRig) {
+                GlbFileWriter glbFileWriter(rigObjectCopy, modelPath,
+                    textureImage, normalImage, ormImage,
+                    &rigStructure, &ibm, nullptr, emissiveImage);
+                glbFileWriter.save();
+            } else {
+                GlbFileWriter glbFileWriter(uvObject, modelPath,
+                    textureImage, normalImage, ormImage, nullptr, nullptr, nullptr, emissiveImage);
+                glbFileWriter.save();
+            }
+        } else {
+            if (hasRig && !clips.empty()) {
+                FbxFileWriter fbxFileWriter(rigObjectCopy, modelPath,
+                    textureImage, normalImage, metalnessImage, roughnessImage, aoImage,
+                    &rigStructure, &ibm, &clips);
+                fbxFileWriter.save();
+            } else if (hasRig) {
+                FbxFileWriter fbxFileWriter(rigObjectCopy, modelPath,
+                    textureImage, normalImage, metalnessImage, roughnessImage, aoImage,
+                    &rigStructure, &ibm, nullptr);
+                fbxFileWriter.save();
+            } else {
+                FbxFileWriter fbxFileWriter(uvObject, modelPath,
+                    textureImage, normalImage, metalnessImage, roughnessImage, aoImage);
+                fbxFileWriter.save();
+            }
+        }
+
+        // All surface materials
+        std::vector<dust3d::SurfaceMaterial> materials = {
+            dust3d::SurfaceMaterial::Stone,
+            dust3d::SurfaceMaterial::Wood,
+            dust3d::SurfaceMaterial::Sand,
+            dust3d::SurfaceMaterial::Metal,
+            dust3d::SurfaceMaterial::Grass,
+            dust3d::SurfaceMaterial::Water,
+            dust3d::SurfaceMaterial::Dirt,
+            dust3d::SurfaceMaterial::Snow
+        };
+
+        // Run WAV generation in another thread
+        QThread* wavThread = new QThread;
+        auto wavWorker = new QObject;
+        wavWorker->moveToThread(wavThread);
+
+        connect(wavThread, &QThread::started, wavWorker, [=]() {
+            for (size_t i = 0; i < clips.size(); ++i) {
+                const auto& clip = clips[i];
+                if (clip.frames.empty())
+                    continue;
+
+                auto soundEvents = dust3d::SoundEventDetector::detect(clip, animTypes[i]);
+                if (soundEvents.empty())
+                    continue;
+
+                for (auto material : materials) {
+                    auto soundData = dust3d::SoundGenerator::generate(
+                        soundEvents, clip.durationSeconds, material);
+                    if (soundData.pcmSamples.empty())
+                        continue;
+
+                    auto wavData = dust3d::SoundGenerator::encodeWav(soundData);
+
+                    std::string materialName = dust3d::surfaceMaterialName(material);
+                    QString wavFilename = QString("%1/%2_%3_%4.wav")
+                                              .arg(directory)
+                                              .arg(modelName)
+                                              .arg(QString::fromStdString(animNames[i]))
+                                              .arg(QString::fromStdString(materialName));
+
+                    QFile file(wavFilename);
+                    if (file.open(QIODevice::WriteOnly)) {
+                        file.write(reinterpret_cast<const char*>(wavData.data()), static_cast<qint64>(wavData.size()));
+                        file.close();
+                    }
+                }
+            }
+
+            QMetaObject::invokeMethod(wavWorker, "deleteLater");
+        });
+        connect(wavWorker, &QObject::destroyed, this, [=]() {
+            delete textureImage;
+            delete normalImage;
+            delete metalnessImage;
+            delete roughnessImage;
+            delete aoImage;
+            delete ormImage;
+            delete emissiveImage;
+            progressWidget->close();
+            progressWidget->deleteLater();
+            wavThread->quit();
+        });
+        connect(wavThread, &QThread::finished, wavThread, &QThread::deleteLater);
+
+        wavThread->start();
+
+        worker->deleteLater();
+        thread->quit();
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+
+    thread->start();
 }
 
 void DocumentWindow::updateXlockButtonState()
@@ -1144,6 +2225,9 @@ void DocumentWindow::checkExportWaitingList()
     m_waitingForExportToFilenames.clear();
 
     bool isSuccessful = m_document->isMeshGenerationSucceed();
+    // An empty result (e.g. a document that failed to load) is not a successful mesh export.
+    if (m_document->currentUvMappedObject().triangles.empty())
+        isSuccessful = false;
     for (const auto& filename : list) {
         if (filename.endsWith(".obj")) {
             exportObjToFilename(filename);
@@ -1152,8 +2236,12 @@ void DocumentWindow::checkExportWaitingList()
             exportFbxToFilename(filename);
             emit waitingExportFinished(filename, isSuccessful);
         } else if (filename.endsWith(".glb")) {
-            exportGlbToFilename(filename);
-            emit waitingExportFinished(filename, isSuccessful);
+            exportGlbToFilename(filename, [this, filename, isSuccessful]() {
+                emit waitingExportFinished(filename, isSuccessful);
+            });
+        } else if (filename.endsWith(".ds3")) {
+            saveTo(filename);
+            emit waitingExportFinished(filename, true);
         } else {
             emit waitingExportFinished(filename, false);
         }
@@ -1169,38 +2257,58 @@ void DocumentWindow::generateComponentPreviewImages()
 
     m_isComponentPreviewImagesObsolete = false;
 
-    QThread* thread = new QThread;
+    m_componentPreviewImagesGenerator = new MeshPreviewImagesGenerator(new ModelOffscreenRender(m_modelRenderWidget->format()), devicePixelRatioF());
 
-    m_componentPreviewImagesGenerator = new MeshPreviewImagesGenerator(new ModelOffscreenRender(m_modelRenderWidget->format()));
-    for (auto& component : m_document->componentMap) {
-        if (!component.second.isPreviewMeshObsolete)
-            continue;
-        component.second.isPreviewMeshObsolete = false;
-        auto previewMesh = std::unique_ptr<ModelMesh>(component.second.takePreviewMesh());
+    auto addComponentPreviewInput = [this](Document::Component& component, const dust3d::Uuid& componentId) {
+        if (!component.isPreviewMeshObsolete)
+            return;
+        component.isPreviewMeshObsolete = false;
+        auto previewMesh = std::unique_ptr<ModelMesh>(component.takePreviewMesh());
+        if (nullptr == previewMesh)
+            return;
         bool useFrontView = false;
-        if (!component.second.linkToPartId.isNull()) {
-            const auto& part = m_document->findPart(component.second.linkToPartId);
+        if (!component.linkToPartId.isNull()) {
+            const auto& part = m_document->findPart(component.linkToPartId);
             if (nullptr != part) {
                 if (dust3d::PartTarget::CutFace == part->target)
                     useFrontView = true;
-                if (!part->colorImageId.isNull()) {
-                    const auto& colorImage = ImageForever::get(part->colorImageId);
-                    if (nullptr != colorImage) {
-                        previewMesh->setTextureImage(new QImage(*colorImage));
-                    }
-                }
             }
         }
-        m_componentPreviewImagesGenerator->addInput(component.first, std::move(previewMesh), useFrontView);
+        if (!component.colorImageId.isNull()) {
+            const auto& colorImage = ImageForever::get(component.colorImageId);
+            if (nullptr != colorImage) {
+                previewMesh->setTextureImage(new QImage(*colorImage));
+            }
+        }
+        m_componentPreviewImagesGenerator->addInput(componentId, std::move(previewMesh), useFrontView);
+    };
+
+    for (auto& component : m_document->componentMap) {
+        addComponentPreviewInput(component.second, component.first);
     }
-    m_componentPreviewImagesGenerator->moveToThread(thread);
-    connect(thread, &QThread::started, m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::process);
-    connect(m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, this, &DocumentWindow::componentPreviewImagesReady);
-    connect(m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, thread, &QThread::quit);
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
+    addComponentPreviewInput(m_document->rootComponent, dust3d::Uuid());
 
     updateInprogressIndicator();
+
+    bool useThreadedOpenGL = true;
+#if defined(Q_OS_WASM)
+    useThreadedOpenGL = false;
+#endif
+
+    if (useThreadedOpenGL) {
+        QThread* thread = new QThread;
+        m_componentPreviewImagesGenerator->moveToThread(thread);
+        connect(thread, &QThread::started, m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::process);
+        connect(m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, this, &DocumentWindow::componentPreviewImagesReady);
+        connect(m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, thread, &QThread::quit);
+        connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+        thread->start();
+    } else {
+        QTimer::singleShot(10, this, [this]() {
+            connect(m_componentPreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, this, &DocumentWindow::componentPreviewImagesReady);
+            m_componentPreviewImagesGenerator->process();
+        });
+    }
 }
 
 void DocumentWindow::componentPreviewImagesReady()
@@ -1236,17 +2344,23 @@ void DocumentWindow::decorateComponentPreviewImages()
     QThread* thread = new QThread;
 
     auto previewInputs = std::make_unique<std::vector<ComponentPreviewImagesDecorator::PreviewInput>>();
-    for (auto& component : m_document->componentMap) {
-        if (!component.second.isPreviewImageDecorationObsolete)
-            continue;
-        component.second.isPreviewImageDecorationObsolete = false;
-        if (nullptr == component.second.previewImage)
-            continue;
+
+    auto addDecorateInput = [&previewInputs](Document::Component& component, const dust3d::Uuid& componentId) {
+        if (!component.isPreviewImageDecorationObsolete)
+            return;
+        component.isPreviewImageDecorationObsolete = false;
+        if (nullptr == component.previewImage)
+            return;
         previewInputs->emplace_back(ComponentPreviewImagesDecorator::PreviewInput {
-            component.first,
-            std::make_unique<QImage>(*component.second.previewImage),
-            !component.second.childrenIds.empty() });
+            componentId,
+            std::make_unique<QImage>(*component.previewImage),
+            !component.childrenIds.empty() });
+    };
+
+    for (auto& component : m_document->componentMap) {
+        addDecorateInput(component.second, component.first);
     }
+    addDecorateInput(m_document->rootComponent, dust3d::Uuid());
     m_componentPreviewImagesDecorator = std::make_unique<ComponentPreviewImagesDecorator>(std::move(previewInputs));
     m_componentPreviewImagesDecorator->moveToThread(thread);
     connect(thread, &QThread::started, m_componentPreviewImagesDecorator.get(), &ComponentPreviewImagesDecorator::process);
@@ -1265,7 +2379,9 @@ void DocumentWindow::componentPreviewImageDecorationsReady()
         for (auto& it : *resultImages) {
             if (nullptr == it.second)
                 continue;
-            m_document->setComponentPreviewPixmap(it.first, QPixmap::fromImage(*it.second));
+            auto pixmap = QPixmap::fromImage(*it.second);
+            pixmap.setDevicePixelRatio(devicePixelRatioF());
+            m_document->setComponentPreviewPixmap(it.first, pixmap);
         }
     }
 
@@ -1280,6 +2396,21 @@ void DocumentWindow::componentPreviewImageDecorationsReady()
 ModelWidget* DocumentWindow::modelWidget()
 {
     return m_modelRenderWidget;
+}
+
+SkeletonGraphicsWidget* DocumentWindow::canvasGraphicsWidget()
+{
+    return m_canvasGraphicsWidget;
+}
+
+BoneManageWidget* DocumentWindow::boneManageWidget()
+{
+    return m_boneManageWidget;
+}
+
+AnimationManageWidget* DocumentWindow::animationManageWidget()
+{
+    return m_animationManageWidget;
 }
 
 QShortcut* DocumentWindow::createShortcut(QKeySequence key)
@@ -1299,30 +2430,20 @@ QShortcut* DocumentWindow::createShortcut(QKeySequence key)
 void DocumentWindow::initializeToolShortcuts(SkeletonGraphicsWidget* graphicsWidget)
 {
     defineShortcut(Qt::Key_A, graphicsWidget, &SkeletonGraphicsWidget::shortcutAddMode);
-    defineShortcut(Qt::CTRL + Qt::Key_A, graphicsWidget, &SkeletonGraphicsWidget::shortcutSelectAll);
-    defineShortcut(Qt::CTRL + Qt::Key_Z, graphicsWidget, &SkeletonGraphicsWidget::shortcutUndo);
-    defineShortcut(Qt::CTRL + Qt::SHIFT + Qt::Key_Z, graphicsWidget, &SkeletonGraphicsWidget::shortcutRedo);
-    defineShortcut(Qt::CTRL + Qt::Key_Y, graphicsWidget, &SkeletonGraphicsWidget::shortcutRedo);
     defineShortcut(Qt::Key_Z, graphicsWidget, &SkeletonGraphicsWidget::shortcutZlock);
     defineShortcut(Qt::Key_Y, graphicsWidget, &SkeletonGraphicsWidget::shortcutYlock);
     defineShortcut(Qt::Key_X, graphicsWidget, &SkeletonGraphicsWidget::shortcutXlock);
     defineShortcut(Qt::Key_S, graphicsWidget, &SkeletonGraphicsWidget::shortcutSelectMode);
-    defineShortcut(Qt::Key_R, graphicsWidget, &SkeletonGraphicsWidget::shortcutToggleRotation);
-    defineShortcut(Qt::Key_O, graphicsWidget, &SkeletonGraphicsWidget::shortcutToggleFlatShading);
-    defineShortcut(Qt::Key_W, graphicsWidget, &SkeletonGraphicsWidget::shortcutToggleWireframe);
+    defineShortcut(Qt::Key_Space, graphicsWidget, &SkeletonGraphicsWidget::shortcutShowComponentProperty);
     defineShortcut(Qt::Key_Escape, graphicsWidget, &SkeletonGraphicsWidget::shortcutEscape);
 }
 
 void DocumentWindow::initializeCanvasShortcuts(SkeletonGraphicsWidget* graphicsWidget)
 {
-    defineShortcut(Qt::Key_Delete, graphicsWidget, &SkeletonGraphicsWidget::shortcutDelete);
     defineShortcut(Qt::Key_Backspace, graphicsWidget, &SkeletonGraphicsWidget::shortcutDelete);
-    defineShortcut(Qt::CTRL + Qt::Key_X, graphicsWidget, &SkeletonGraphicsWidget::shortcutCut);
-    defineShortcut(Qt::CTRL + Qt::Key_C, graphicsWidget, &SkeletonGraphicsWidget::shortcutCopy);
-    defineShortcut(Qt::CTRL + Qt::Key_V, graphicsWidget, &SkeletonGraphicsWidget::shortcutPaste);
-    defineShortcut(Qt::ALT + Qt::Key_Minus, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomRenderedModelByMinus10);
+    defineShortcut(Qt::ALT | Qt::Key_Minus, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomRenderedModelByMinus10);
     defineShortcut(Qt::Key_Minus, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomSelectedByMinus1);
-    defineShortcut(Qt::ALT + Qt::Key_Equal, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomRenderedModelBy10);
+    defineShortcut(Qt::ALT | Qt::Key_Equal, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomRenderedModelBy10);
     defineShortcut(Qt::Key_Equal, graphicsWidget, &SkeletonGraphicsWidget::shortcutZoomSelectedBy1);
     defineShortcut(Qt::Key_Comma, graphicsWidget, &SkeletonGraphicsWidget::shortcutRotateSelectedByMinus1);
     defineShortcut(Qt::Key_Period, graphicsWidget, &SkeletonGraphicsWidget::shortcutRotateSelectedBy1);
@@ -1334,6 +2455,7 @@ void DocumentWindow::initializeCanvasShortcuts(SkeletonGraphicsWidget* graphicsW
     defineShortcut(Qt::Key_BracketRight, graphicsWidget, &SkeletonGraphicsWidget::shortcutScaleSelectedBy1);
     defineShortcut(Qt::Key_E, graphicsWidget, &SkeletonGraphicsWidget::shortcutSwitchProfileOnSelected);
     defineShortcut(Qt::Key_H, graphicsWidget, &SkeletonGraphicsWidget::shortcutShowOrHideSelectedPart);
+    defineShortcut(Qt::SHIFT | Qt::Key_H, graphicsWidget, &SkeletonGraphicsWidget::shortcutHideOtherParts);
     defineShortcut(Qt::Key_J, graphicsWidget, &SkeletonGraphicsWidget::shortcutEnableOrDisableSelectedPart);
     defineShortcut(Qt::Key_L, graphicsWidget, &SkeletonGraphicsWidget::shortcutLockOrUnlockSelectedPart);
     defineShortcut(Qt::Key_F, graphicsWidget, &SkeletonGraphicsWidget::shortcutCheckPartComponent);
@@ -1348,10 +2470,24 @@ void DocumentWindow::initializeShortcuts()
     defineShortcut(Qt::Key_B, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutSubdivedOrNotSelectedPart);
     defineShortcut(Qt::Key_U, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutRoundEndOrNotSelectedPart);
     defineShortcut(Qt::Key_C, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutChamferedOrNotSelectedPart);
+
+    // Edit menu commands: QShortcut owns the key binding so shortcuts are
+    // always active regardless of the QAction's enabled state (which is
+    // managed separately in the aboutToShow handler for menu appearance only).
+    defineShortcut(QKeySequence::Undo, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutUndo);
+    defineShortcut(QKeySequence::Redo, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutRedo);
+    defineShortcut(QKeySequence(Qt::CTRL | Qt::Key_Y), m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutRedo);
+    defineShortcut(QKeySequence::Cut, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutCut);
+    defineShortcut(QKeySequence::Copy, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutCopy);
+    defineShortcut(QKeySequence::Paste, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutPaste);
+    defineShortcut(QKeySequence::Delete, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutDelete);
+    defineShortcut(QKeySequence::SelectAll, m_canvasGraphicsWidget, &SkeletonGraphicsWidget::shortcutSelectAll);
 }
 
 void DocumentWindow::openRecentFile()
 {
+#if defined(Q_OS_WASM)
+#else
     if (!m_documentSaved) {
         QMessageBox::StandardButton answer = QMessageBox::question(this,
             APP_NAME,
@@ -1361,7 +2497,7 @@ void DocumentWindow::openRecentFile()
         if (answer != QMessageBox::Yes)
             return;
     }
-
+#endif
     QAction* action = qobject_cast<QAction*>(sender());
     if (action) {
         QString fileName = action->data().toString();
@@ -1371,6 +2507,8 @@ void DocumentWindow::openRecentFile()
 
 void DocumentWindow::updateRecentFileActions()
 {
+#if defined(Q_OS_WASM)
+#else
     QStringList files = Preferences::instance().recentFileList();
 
     for (int i = 0; i < (int)files.size() && i < (int)m_recentFileActions.size(); ++i) {
@@ -1382,7 +2520,11 @@ void DocumentWindow::updateRecentFileActions()
     for (int j = files.size(); j < (int)m_recentFileActions.size(); ++j)
         m_recentFileActions[j]->setVisible(false);
 
-    m_recentFileSeparatorAction->setVisible(files.size() > 0);
+    bool hasRecentFiles = files.size() > 0;
+    m_recentFileSeparatorAction->setVisible(hasRecentFiles);
+    if (m_clearRecentFilesAction)
+        m_clearRecentFilesAction->setEnabled(hasRecentFiles);
+#endif
 }
 
 QString DocumentWindow::strippedName(const QString& fullFileName)
@@ -1401,73 +2543,19 @@ void DocumentWindow::toggleRenderColor()
     forceUpdateRenderModel();
 }
 
-void DocumentWindow::generateBonePreviewImages()
-{
-    if (nullptr != m_bonePreviewImagesGenerator) {
-        m_isBonePreviewImagesObsolete = true;
-        return;
-    }
-
-    m_isBonePreviewImagesObsolete = false;
-
-    QThread* thread = new QThread;
-
-    m_bonePreviewImagesGenerator = new MeshPreviewImagesGenerator(new ModelOffscreenRender(m_modelRenderWidget->format()));
-    for (auto& bone : m_document->boneMap) {
-        if (!bone.second.isPreviewMeshObsolete)
-            continue;
-        bone.second.isPreviewMeshObsolete = false;
-        auto previewMesh = std::unique_ptr<ModelMesh>(bone.second.takePreviewMesh());
-        const bool useFrontView = false;
-        m_bonePreviewImagesGenerator->addInput(bone.first, std::move(previewMesh), useFrontView);
-    }
-    m_bonePreviewImagesGenerator->moveToThread(thread);
-    connect(thread, &QThread::started, m_bonePreviewImagesGenerator, &MeshPreviewImagesGenerator::process);
-    connect(m_bonePreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, this, &DocumentWindow::bonePreviewImagesReady);
-    connect(m_bonePreviewImagesGenerator, &MeshPreviewImagesGenerator::finished, thread, &QThread::quit);
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
-
-    updateInprogressIndicator();
-}
-
-void DocumentWindow::bonePreviewImagesReady()
-{
-    std::unique_ptr<std::map<dust3d::Uuid, QImage>> boneImages;
-    boneImages.reset(m_bonePreviewImagesGenerator->takeImages());
-    if (nullptr != boneImages) {
-        for (const auto& it : *boneImages) {
-            m_document->setBonePreviewPixmap(it.first, QPixmap::fromImage(it.second));
-        }
-    }
-
-    delete m_bonePreviewImagesGenerator;
-    m_bonePreviewImagesGenerator = nullptr;
-
-    if (m_isBonePreviewImagesObsolete)
-        generateBonePreviewImages();
-    else
-        updateInprogressIndicator();
-}
-
 void DocumentWindow::forceUpdateRenderModel()
 {
     ModelMesh* mesh = nullptr;
-    if (m_showBodyBonePreview) {
-        mesh = m_document->takeResultBodyBonePreviewMesh();
-        m_currentUpdatedMeshId = m_document->resultBodyBonePreviewMeshId();
+    if (m_document->isMeshGenerating() || m_document->isTextureGenerating()) {
+        mesh = m_document->takeResultMesh();
+        m_currentUpdatedMeshId = m_document->resultMeshId();
     } else {
-        if (m_document->isMeshGenerating() || m_document->isTextureGenerating()) {
-            mesh = m_document->takeResultMesh();
-            m_currentUpdatedMeshId = m_document->resultMeshId();
-        } else {
-            mesh = m_document->takeResultTextureMesh();
-            m_currentUpdatedMeshId = m_document->resultTextureMeshId();
-            m_currentTextureImageUpdateVersion = m_document->resultTextureImageUpdateVersion();
-        }
-        if (m_modelRemoveColor && mesh)
-            mesh->removeColor();
+        mesh = m_document->takeResultTextureMesh();
+        m_currentUpdatedMeshId = m_document->resultTextureMeshId();
+        m_currentTextureImageUpdateVersion = m_document->resultTextureImageUpdateVersion();
     }
+    if (m_modelRemoveColor && mesh)
+        mesh->removeColor();
     m_modelRenderWidget->updateMesh(mesh);
 }
 
@@ -1501,4 +2589,39 @@ void DocumentWindow::updateRenderWireframe()
     if (m_document->resultMeshId() == m_currentUpdatedWireframeId)
         return;
     forceUpdateRenderWireframe();
+}
+
+void DocumentWindow::onBonesDockerVisibilityChanged(bool visible)
+{
+    if (visible) {
+        // Bones docker became active - save current lock states and lock everything
+        m_savedXlockState = m_document->xlocked;
+        m_savedYlockState = m_document->ylocked;
+        m_savedZlockState = m_document->zlocked;
+        m_savedRadiusLockState = m_document->radiusLocked;
+
+        // Lock all axes and radius
+        m_document->setXlockState(true);
+        m_document->setYlockState(true);
+        m_document->setZlockState(true);
+        m_document->setRadiusLockState(true);
+
+        m_canvasGraphicsWidget->setNodeSelectionEnabled(false);
+        m_boneManageWidget->setShortcutsEnabled(true);
+    } else {
+        // Bones docker became inactive - restore previous lock states
+        m_document->setXlockState(m_savedXlockState);
+        m_document->setYlockState(m_savedYlockState);
+        m_document->setZlockState(m_savedZlockState);
+        m_document->setRadiusLockState(m_savedRadiusLockState);
+
+        m_canvasGraphicsWidget->setNodeSelectionEnabled(true);
+        m_boneManageWidget->setShortcutsEnabled(false);
+    }
+}
+
+void DocumentWindow::onAnimationsDockerVisibilityChanged(bool visible)
+{
+    Q_UNUSED(visible);
+    // Placeholder for later animation-related behavior.
 }

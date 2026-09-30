@@ -23,6 +23,8 @@
 #ifndef DUST3D_BASE_DS3_FILE_H_
 #define DUST3D_BASE_DS3_FILE_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -43,6 +45,7 @@ public:
     void loadItem(const std::string& name, std::vector<std::uint8_t>* byteArray);
     const std::vector<Ds3ReaderItem>& items() const;
     static std::string m_applicationName;
+    static std::string m_magicApplicationName;
     static std::string m_fileFormatVersion;
     static std::string m_headFormat;
 
@@ -68,11 +71,13 @@ class Ds3FileWriter {
 public:
     bool add(const std::string& name, const std::string& type, const void* buffer, size_t bufferSize);
     bool save(const std::string& filename);
+    void save(std::vector<std::uint8_t>& byteArray);
 
 private:
     std::map<std::string, Ds3WriterItem> m_itemsMap;
     std::vector<Ds3WriterItem> m_items;
     std::string m_filename;
+    void getHeaderXml(std::string& headerXml);
 };
 
 }
